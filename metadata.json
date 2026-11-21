@@ -1,0 +1,6 @@
+{
+  "name": "Vice Horizon",
+  "description": "3D open-world Vice sunset sandbox where you can walk, sprint, explore 3 houses, and drive sports cars.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

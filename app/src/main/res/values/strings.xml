@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Vice Horizon</string>
+    <string name="tagline_subtitle">KEY BAYSIDE · FREE ROAM 3D</string>
+    <string name="action_play">ENTER KEY BAYSIDE</string>
+    <string name="action_resume">RESUME</string>
+    <string name="action_reset_pos">RESPAWN AT VILLA</string>
+    <string name="action_summon_car">CALL SPORTS CAR</string>
+    <string name="action_enter_car">DRIVE</string>
+    <string name="action_exit_car">EXIT</string>
+    <string name="action_jump">JUMP</string>
+    <string name="action_sprint">SPRINT</string>
+    <string name="action_drift">DRIFT</string>
+    <string name="action_gas">GAS</string>
+    <string name="action_brake">REV</string>
+    <string name="label_controls_hint">Drag screen to look · Walk inside 3 houses · Drive cars on roads or sail boats in the sea</string>
+</resources>
