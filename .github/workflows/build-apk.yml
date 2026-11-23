@@ -50,7 +50,8 @@ jobs:
 
       - name: Build debug APK
         run: |
-          if [ -x "./gradlew" ]; then
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
             ./gradlew :app:assembleDebug --no-daemon --stacktrace
           else
             gradle :app:assembleDebug --no-daemon --stacktrace
@@ -77,7 +78,7 @@ jobs:
         id: upload_artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
+          name: Vice-Horizon-APK
           path: ${{ steps.verify_apk.outputs.apk_path }}
           if-no-files-found: error
 
@@ -118,7 +119,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ARTIFACT_NAME="app-debug-apk"
+          ARTIFACT_NAME="Vice-Horizon-APK"
           RELEASE_TAG="${{ steps.release_meta.outputs.release_tag }}"
           APK_FILENAME="${{ steps.verify_apk.outputs.apk_filename }}"
 
