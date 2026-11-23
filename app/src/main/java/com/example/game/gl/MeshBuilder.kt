@@ -166,11 +166,11 @@ object MeshBuilder {
         val i2 = ((r + 1) * stride + s).toShort()
         val i3 = (i2 + 1).toShort()
         if (inverted) {
-          indices.add(i0); indices.add(i1); indices.add(i2)
-          indices.add(i1); indices.add(i3); indices.add(i2)
-        } else {
           indices.add(i0); indices.add(i2); indices.add(i1)
           indices.add(i1); indices.add(i2); indices.add(i3)
+        } else {
+          indices.add(i0); indices.add(i1); indices.add(i2)
+          indices.add(i1); indices.add(i3); indices.add(i2)
         }
       }
     }
@@ -211,7 +211,7 @@ object MeshBuilder {
     return Mesh(verts.toFloatArray(), indices.toShortArray())
   }
 
-  fun createWaterPlane(size: Float = 440f, grid: Int = 36): Mesh {
+  fun createWaterPlane(size: Float = 760f, grid: Int = 48): Mesh {
     val verts = ArrayList<Float>()
     val indices = ArrayList<Short>()
     val half = size * 0.5f
@@ -362,6 +362,74 @@ object MeshBuilder {
     val cws = ws * 0.76f
     addQuad(-ws, ds, zs, -cws, cs, zs, 0f, ks, zs, 0f, ds, zs)
     addQuad(0f, ds, zs, 0f, ks, zs, cws, cs, zs, ws, ds, zs)
+
+    return Mesh(verts.toFloatArray(), indices.toShortArray())
+  }
+
+  /**
+   * Sculpted swept airfoil wing/stabilizer half-span extending from root (x=0) to tip (x=+1.0 * tipSign).
+   */
+  fun createSweptWing(rightSide: Boolean = true): Mesh {
+    val s = if (rightSide) 1f else -1f
+    val rootLeadZ = 1.45f
+    val rootTrailZ = -1.65f
+    val tipLeadZ = -0.95f
+    val tipTrailZ = -2.35f
+    val rootThick = 0.22f
+    val tipThick = 0.11f
+
+    val verts = ArrayList<Float>()
+    val indices = ArrayList<Short>()
+
+    fun addQuad(
+      x0: Float, y0: Float, z0: Float,
+      x1: Float, y1: Float, z1: Float,
+      x2: Float, y2: Float, z2: Float,
+      x3: Float, y3: Float, z3: Float,
+    ) {
+      val ux = x1 - x0; val uy = y1 - y0; val uz = z1 - z0
+      val vx = x2 - x0; val vy = y2 - y0; val vz = z2 - z0
+      var nx = uy * vz - uz * vy
+      var ny = uz * vx - ux * vz
+      var nz = ux * vy - uy * vx
+      val len = sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(1e-5f)
+      nx /= len; ny /= len; nz /= len
+      val base = (verts.size / 8).toShort()
+      verts.addAll(listOf(x0, y0, z0, nx, ny, nz, 0f, 0f))
+      verts.addAll(listOf(x1, y1, z1, nx, ny, nz, 1f, 0f))
+      verts.addAll(listOf(x2, y2, z2, nx, ny, nz, 1f, 1f))
+      verts.addAll(listOf(x3, y3, z3, nx, ny, nz, 0f, 1f))
+      indices.add(base); indices.add((base + 1).toShort()); indices.add((base + 2).toShort())
+      indices.add(base); indices.add((base + 2).toShort()); indices.add((base + 3).toShort())
+    }
+
+    val rx = 0f
+    val tx = 1.0f * s
+    val ty = 0.08f // subtle aerodynamic dihedral lift
+
+    if (rightSide) {
+      // Top surface
+      addQuad(rx, rootThick, rootLeadZ, tx, ty + tipThick, tipLeadZ, tx, ty + tipThick, tipTrailZ, rx, rootThick, rootTrailZ)
+      // Bottom surface
+      addQuad(rx, -rootThick, rootTrailZ, tx, ty - tipThick, tipTrailZ, tx, ty - tipThick, tipLeadZ, rx, -rootThick, rootLeadZ)
+      // Leading edge
+      addQuad(rx, -rootThick, rootLeadZ, tx, ty - tipThick, tipLeadZ, tx, ty + tipThick, tipLeadZ, rx, rootThick, rootLeadZ)
+      // Trailing edge
+      addQuad(tx, ty - tipThick, tipTrailZ, rx, -rootThick, rootTrailZ, rx, rootThick, rootTrailZ, tx, ty + tipThick, tipTrailZ)
+      // Wingtip cap
+      addQuad(tx, ty - tipThick, tipLeadZ, tx, ty - tipThick, tipTrailZ, tx, ty + tipThick, tipTrailZ, tx, ty + tipThick, tipLeadZ)
+    } else {
+      // Top surface
+      addQuad(tx, ty + tipThick, tipLeadZ, rx, rootThick, rootLeadZ, rx, rootThick, rootTrailZ, tx, ty + tipThick, tipTrailZ)
+      // Bottom surface
+      addQuad(tx, ty - tipThick, tipTrailZ, rx, -rootThick, rootTrailZ, rx, -rootThick, rootLeadZ, tx, ty - tipThick, tipLeadZ)
+      // Leading edge
+      addQuad(tx, ty - tipThick, tipLeadZ, rx, -rootThick, rootLeadZ, rx, rootThick, rootLeadZ, tx, ty + tipThick, tipLeadZ)
+      // Trailing edge
+      addQuad(rx, -rootThick, rootTrailZ, tx, ty - tipThick, tipTrailZ, tx, ty + tipThick, tipTrailZ, rx, rootThick, rootTrailZ)
+      // Wingtip cap
+      addQuad(tx, ty - tipThick, tipTrailZ, tx, ty - tipThick, tipLeadZ, tx, ty + tipThick, tipLeadZ, tx, ty + tipThick, tipTrailZ)
+    }
 
     return Mesh(verts.toFloatArray(), indices.toShortArray())
   }

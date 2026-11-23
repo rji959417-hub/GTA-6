@@ -22,9 +22,19 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.DirectionsBoat
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.EventSeat
+import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.GpsFixed
+import androidx.compose.material.icons.filled.Paragliding
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.SportsMma
+import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Upgrade
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -45,6 +55,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.game.state.DropPhase
+import com.example.game.state.WeaponType
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.GoldenHour
 import com.example.ui.theme.NeonPink
@@ -190,7 +202,7 @@ fun HoldControlButton(
         imageVector = icon,
         contentDescription = label,
         tint = if (pressed) Color.White else accentColor,
-        modifier = Modifier.size(24.dp),
+        modifier = Modifier.size(22.dp),
       )
       Spacer(modifier = Modifier.height(2.dp))
       Text(
@@ -208,45 +220,150 @@ fun OnFootActionPad(
   nearbyVehicleOccupied: Boolean,
   nearbyBoatName: String?,
   nearbyBoatOccupied: Boolean,
+  nearbyGunShop: Boolean,
+  nearbyFriendCandidate: Boolean,
+  nearbyParkourLabel: String?,
+  isSitting: Boolean,
+  isScoped: Boolean,
+  equippedWeapon: WeaponType,
   onSprintChange: (Boolean) -> Unit,
   onJumpTap: () -> Unit,
+  onClimbTap: () -> Unit,
   onEnterCraftTap: () -> Unit,
+  onSitToggleTap: () -> Unit,
+  onBefriendTap: () -> Unit,
+  onScopeToggleTap: () -> Unit,
+  onPunchTap: () -> Unit,
+  onKickTap: () -> Unit,
+  onFireChange: (Boolean) -> Unit,
+  onOpenGunShopTap: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Column(
     horizontalAlignment = Alignment.End,
-    verticalArrangement = Arrangement.spacedBy(10.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
     modifier = modifier,
   ) {
-    if (nearbyBoatName != null) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      if (nearbyParkourLabel != null) {
+        TapControlButton(
+          label = nearbyParkourLabel,
+          icon = Icons.Filled.Upgrade,
+          accentColor = ElectricCyan,
+          onClick = onClimbTap,
+          width = 108.dp,
+          height = 50.dp,
+          testTagName = "climb_button",
+        )
+      }
+      if (nearbyFriendCandidate) {
+        TapControlButton(
+          label = "FRIEND",
+          icon = Icons.Filled.PersonAdd,
+          accentColor = PalmMint,
+          onClick = onBefriendTap,
+          width = 88.dp,
+          height = 50.dp,
+          testTagName = "befriend_button",
+        )
+      }
+      when {
+        nearbyBoatName != null -> {
+          TapControlButton(
+            label = if (nearbyBoatOccupied) "HIJACK" else "SAIL BOAT",
+            icon = Icons.Filled.DirectionsBoat,
+            accentColor = if (nearbyBoatOccupied) NeonPink else PalmMint,
+            onClick = onEnterCraftTap,
+            width = 104.dp,
+            height = 50.dp,
+            testTagName = "enter_boat_button",
+          )
+        }
+        nearbyVehicleName != null -> {
+          TapControlButton(
+            label = if (nearbyVehicleOccupied) "HIJACK" else "DRIVE",
+            icon = Icons.Filled.DirectionsCar,
+            accentColor = if (nearbyVehicleOccupied) NeonPink else GoldenHour,
+            onClick = onEnterCraftTap,
+            width = 96.dp,
+            height = 50.dp,
+            testTagName = "enter_car_button",
+          )
+        }
+        nearbyGunShop -> {
+          TapControlButton(
+            label = "BUY GUNS",
+            icon = Icons.Filled.Storefront,
+            accentColor = GoldenHour,
+            onClick = onOpenGunShopTap,
+            width = 106.dp,
+            height = 50.dp,
+            testTagName = "context_gun_shop_button",
+          )
+        }
+      }
+    }
+
+    // Upper Combat & Posture Row: SIT/STAND · KICK · PUNCH
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       TapControlButton(
-        label = if (nearbyBoatOccupied) "HIJACK" else "SAIL BOAT",
-        icon = Icons.Filled.DirectionsBoat,
-        accentColor = if (nearbyBoatOccupied) NeonPink else PalmMint,
-        onClick = onEnterCraftTap,
-        width = 98.dp,
-        height = 56.dp,
-        testTagName = "enter_boat_button",
+        label = if (isSitting) "STAND" else "SIT",
+        icon = Icons.Filled.EventSeat,
+        accentColor = if (isSitting) PalmMint else ElectricCyan,
+        onClick = onSitToggleTap,
+        width = 60.dp,
+        height = 52.dp,
+        testTagName = "sit_button",
       )
-    } else if (nearbyVehicleName != null) {
       TapControlButton(
-        label = if (nearbyVehicleOccupied) "HIJACK" else "DRIVE",
-        icon = Icons.Filled.DirectionsCar,
-        accentColor = if (nearbyVehicleOccupied) NeonPink else GoldenHour,
-        onClick = onEnterCraftTap,
-        width = 88.dp,
-        height = 56.dp,
-        testTagName = "enter_car_button",
+        label = "KICK",
+        icon = Icons.Filled.Bolt,
+        accentColor = GoldenHour,
+        onClick = onKickTap,
+        width = 60.dp,
+        height = 52.dp,
+        testTagName = "kick_button",
+      )
+      TapControlButton(
+        label = "PUNCH",
+        icon = Icons.Filled.SportsMma,
+        accentColor = NeonPink,
+        onClick = onPunchTap,
+        width = 66.dp,
+        height = 52.dp,
+        testTagName = "punch_button",
       )
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+
+    // Lower Action Row: SCOPE + SHOOT (when gun equipped) · JUMP · SPRINT
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      if (equippedWeapon != WeaponType.FISTS) {
+        TapControlButton(
+          label = if (isScoped) "UNSCOPE" else "SCOPE",
+          icon = Icons.Filled.CenterFocusStrong,
+          accentColor = if (isScoped) GoldenHour else ElectricCyan,
+          onClick = onScopeToggleTap,
+          width = 64.dp,
+          height = 58.dp,
+          testTagName = "scope_button",
+        )
+        HoldControlButton(
+          label = "SHOOT",
+          icon = Icons.Filled.GpsFixed,
+          accentColor = SunsetCoral,
+          onPressChange = onFireChange,
+          width = 72.dp,
+          height = 58.dp,
+          testTagName = "fire_button",
+        )
+      }
       TapControlButton(
         label = "JUMP",
         icon = Icons.Filled.ArrowUpward,
         accentColor = ElectricCyan,
         onClick = onJumpTap,
-        width = 66.dp,
-        height = 66.dp,
+        width = 58.dp,
+        height = 58.dp,
         testTagName = "jump_button",
       )
       HoldControlButton(
@@ -254,8 +371,8 @@ fun OnFootActionPad(
         icon = Icons.AutoMirrored.Filled.DirectionsRun,
         accentColor = NeonPink,
         onPressChange = onSprintChange,
-        width = 72.dp,
-        height = 66.dp,
+        width = 62.dp,
+        height = 58.dp,
         testTagName = "sprint_button",
       )
     }
@@ -381,6 +498,85 @@ fun DrivingControlsRight(
 }
 
 @Composable
+fun AirborneDropActionPad(
+  dropPhase: DropPhase,
+  planeCountdownSec: Int,
+  altitudeMeters: Int,
+  onJumpFromPlaneTap: () -> Unit,
+  onDeployChuteTap: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Column(
+    horizontalAlignment = Alignment.End,
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+    modifier = modifier,
+  ) {
+    Box(
+      modifier =
+        Modifier.clip(RoundedCornerShape(12.dp))
+          .background(ViceSurface.copy(alpha = 0.86f))
+          .border(1.2.dp, ElectricCyan.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+          .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+      val statusText =
+        when (dropPhase) {
+          DropPhase.AIRPLANE -> "AUTO-EJECT IN ${planeCountdownSec}s"
+          DropPhase.FREEFALL -> "FREEFALL · ALT ${altitudeMeters}m"
+          DropPhase.PARACHUTE -> "CHUTE OPEN · ALT ${altitudeMeters}m"
+          DropPhase.GROUND -> "GROUNDED"
+        }
+      Text(
+        text = statusText,
+        style = MaterialTheme.typography.labelSmall,
+        color = if (dropPhase == DropPhase.AIRPLANE) GoldenHour else PalmMint,
+      )
+    }
+
+    when (dropPhase) {
+      DropPhase.AIRPLANE -> {
+        TapControlButton(
+          label = "JUMP NOW",
+          icon = Icons.Filled.FlightTakeoff,
+          accentColor = NeonPink,
+          onClick = onJumpFromPlaneTap,
+          width = 112.dp,
+          height = 76.dp,
+          testTagName = "plane_jump_button",
+        )
+      }
+      DropPhase.FREEFALL -> {
+        TapControlButton(
+          label = "PARACHUTE",
+          icon = Icons.Filled.Paragliding,
+          accentColor = ElectricCyan,
+          onClick = onDeployChuteTap,
+          width = 118.dp,
+          height = 76.dp,
+          testTagName = "deploy_chute_button",
+        )
+      }
+      DropPhase.PARACHUTE -> {
+        Box(
+          modifier =
+            Modifier.clip(RoundedCornerShape(16.dp))
+              .background(PalmMint.copy(alpha = 0.22f))
+              .border(1.5.dp, PalmMint, RoundedCornerShape(16.dp))
+              .padding(horizontal = 14.dp, vertical = 12.dp)
+              .testTag("parachute_glide_badge")
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Paragliding, contentDescription = "Parachute Glide", tint = PalmMint, modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("STEER LANDING", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+          }
+        }
+      }
+      DropPhase.GROUND -> Unit
+    }
+  }
+}
+
+@Composable
 fun TapControlButton(
   label: String,
   icon: ImageVector,
@@ -433,7 +629,7 @@ fun TapControlButton(
         imageVector = icon,
         contentDescription = label,
         tint = if (pressed) Color.White else accentColor,
-        modifier = Modifier.size(22.dp),
+        modifier = Modifier.size(20.dp),
       )
       Spacer(modifier = Modifier.height(2.dp))
       Text(

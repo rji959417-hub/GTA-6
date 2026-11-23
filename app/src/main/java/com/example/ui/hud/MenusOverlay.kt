@@ -27,9 +27,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DirectionsBoat
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.EventSeat
+import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SportsMma
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material3.Button
@@ -96,7 +100,7 @@ fun TitleScreenOverlay(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         modifier =
-          Modifier.widthIn(max = 760.dp)
+          Modifier.widthIn(max = 780.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(ViceSurface.copy(alpha = 0.84f))
             .border(
@@ -123,9 +127,10 @@ fun TitleScreenOverlay(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
           ) {
-            FeatureChip(Icons.Filled.Home, "3 Enterable Houses", GoldenHour)
-            FeatureChip(Icons.Filled.DirectionsCar, "AI Traffic & Cars", NeonPink)
-            FeatureChip(Icons.Filled.DirectionsBoat, "Ocean Boats", PalmMint)
+            FeatureChip(Icons.Filled.FlightTakeoff, "Plane & Chute Drop", ElectricCyan)
+            FeatureChip(Icons.Filled.Home, "3 Maps · Rooftops", PalmMint)
+            FeatureChip(Icons.Filled.SportsMma, "Hand & Foot Fight", NeonPink)
+            FeatureChip(Icons.Filled.Storefront, "Gun Shop", GoldenHour)
           }
           Spacer(modifier = Modifier.height(8.dp))
           Text(
@@ -182,9 +187,10 @@ fun TitleScreenOverlay(
           horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          FeatureChip(Icons.Filled.Home, "3 Enterable Houses", GoldenHour)
-          FeatureChip(Icons.Filled.DirectionsCar, "AI Traffic & Cars", NeonPink)
-          FeatureChip(Icons.Filled.DirectionsBoat, "Ocean Boats", PalmMint)
+          FeatureChip(Icons.Filled.FlightTakeoff, "Plane & Chute Drop", ElectricCyan)
+          FeatureChip(Icons.Filled.Home, "3 Maps · Rooftops", PalmMint)
+          FeatureChip(Icons.Filled.SportsMma, "Hand & Foot Fight", NeonPink)
+          FeatureChip(Icons.Filled.Storefront, "Gun Shop", GoldenHour)
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -238,11 +244,14 @@ fun PauseMapModal(
   houses: List<HouseSpec>,
   onResume: () -> Unit,
   onTeleportHouse: (Int) -> Unit,
+  onTeleportGunShop: () -> Unit,
   onTeleportPier: () -> Unit,
   onSummonCar: () -> Unit,
   onResetWorld: () -> Unit,
   onSelectTime: (TimeOfDayPreset) -> Unit,
   onCycleCamera: () -> Unit,
+  onAirplaneDrop: () -> Unit,
+  onReturnToLobby: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   BoxWithConstraints(
@@ -271,9 +280,9 @@ fun PauseMapModal(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Column {
-          Text("KEY BAYSIDE MAP", style = MaterialTheme.typography.headlineMedium, color = TextPrimary)
+          Text("VICE HORIZON WORLD MAP", style = MaterialTheme.typography.headlineMedium, color = TextPrimary)
           Text(
-            text = "Fast-travel to any house or the ocean boat pier",
+            text = "Rooftop Town ↔ Key Bayside ↔ Green Valley · 3D Multi-Floor Maps",
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary,
           )
@@ -288,15 +297,44 @@ fun PauseMapModal(
         }
       }
 
-      // 3 Houses + Ocean Boat Pier Quick Jump Cards
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Vice Arms Gun Shop Fast Travel Card
+        Row(
+          modifier =
+            Modifier.fillMaxWidth()
+              .clip(RoundedCornerShape(14.dp))
+              .background(ViceVoid.copy(alpha = 0.65f))
+              .border(1.dp, SunsetCoral.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+              .clickable(onClick = onTeleportGunShop)
+              .padding(horizontal = 14.dp, vertical = 10.dp)
+              .testTag("teleport_gun_shop"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+              Icons.Filled.Storefront,
+              contentDescription = "Vice Arms Gun Shop",
+              tint = SunsetCoral,
+              modifier = Modifier.size(22.dp),
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+              Text("Vice Arms Gun Shop", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+              Text("Pistols, SMGs, Shotguns & Rifles · Cash $${hud.playerCash}", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+            }
+          }
+          Text("SHOP", style = MaterialTheme.typography.labelLarge, color = SunsetCoral)
+        }
+
         houses.forEachIndexed { index, house ->
+          val accent = if (house.floors >= 2) PalmMint else GoldenHour
           Row(
             modifier =
               Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
                 .background(ViceVoid.copy(alpha = 0.6f))
-                .border(1.dp, GoldenHour.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                .border(1.dp, accent.copy(alpha = 0.42f), RoundedCornerShape(14.dp))
                 .clickable { onTeleportHouse(index) }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
                 .testTag("teleport_house_$index"),
@@ -307,7 +345,7 @@ fun PauseMapModal(
               Icon(
                 Icons.Filled.Home,
                 contentDescription = house.name,
-                tint = GoldenHour,
+                tint = accent,
                 modifier = Modifier.size(22.dp),
               )
               Spacer(modifier = Modifier.width(10.dp))
@@ -316,11 +354,19 @@ fun PauseMapModal(
                 Text(house.subtitle, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
               }
             }
-            Text("GO", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
+            Text(
+              text =
+                when {
+                  house.hasRooftop -> "ROOF · 2F"
+                  house.floors >= 2 -> "2F · GO"
+                  else -> "GO"
+                },
+              style = MaterialTheme.typography.labelLarge,
+              color = if (house.floors >= 2) PalmMint else ElectricCyan,
+            )
           }
         }
 
-        // Boat Pier Fast Travel
         Row(
           modifier =
             Modifier.fillMaxWidth()
@@ -391,8 +437,17 @@ fun PauseMapModal(
           modifier = Modifier.weight(1f).testTag("summon_car_button"),
         ) {
           Icon(Icons.Filled.DirectionsCar, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(18.dp))
-          Spacer(modifier = Modifier.width(6.dp))
-          Text("CALL CAR", color = TextPrimary, style = MaterialTheme.typography.labelSmall)
+          Spacer(modifier = Modifier.width(5.dp))
+          Text("CAR", color = TextPrimary, style = MaterialTheme.typography.labelSmall)
+        }
+        OutlinedButton(
+          onClick = onAirplaneDrop,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier.weight(1f).testTag("plane_redrop_button"),
+        ) {
+          Icon(Icons.Filled.FlightTakeoff, contentDescription = null, tint = NeonPink, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(5.dp))
+          Text("PLANE DROP", color = TextPrimary, style = MaterialTheme.typography.labelSmall)
         }
         OutlinedButton(
           onClick = onCycleCamera,
@@ -400,19 +455,33 @@ fun PauseMapModal(
           modifier = Modifier.weight(1f).testTag("cycle_camera_modal_button"),
         ) {
           Icon(Icons.Filled.Videocam, contentDescription = null, tint = GoldenHour, modifier = Modifier.size(18.dp))
-          Spacer(modifier = Modifier.width(6.dp))
+          Spacer(modifier = Modifier.width(5.dp))
           Text(hud.cameraMode.label, color = TextPrimary, style = MaterialTheme.typography.labelSmall)
         }
       }
 
-      OutlinedButton(
-        onClick = onResetWorld,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth().testTag("reset_world_button"),
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        Icon(Icons.Filled.Refresh, contentDescription = null, tint = NeonPink, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(stringResource(R.string.action_reset_pos), color = TextPrimary)
+        OutlinedButton(
+          onClick = onResetWorld,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier.weight(1f).testTag("reset_world_button"),
+        ) {
+          Icon(Icons.Filled.Refresh, contentDescription = null, tint = NeonPink, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(stringResource(R.string.action_reset_pos), color = TextPrimary, style = MaterialTheme.typography.labelSmall)
+        }
+        OutlinedButton(
+          onClick = onReturnToLobby,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier.weight(1f).testTag("return_to_lobby_button"),
+        ) {
+          Icon(Icons.Filled.Home, contentDescription = null, tint = GoldenHour, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("BACK TO LOBBY", color = GoldenHour, style = MaterialTheme.typography.labelSmall)
+        }
       }
     }
   }

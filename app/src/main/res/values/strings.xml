@@ -12,5 +12,21 @@
     <string name="action_drift">DRIFT</string>
     <string name="action_gas">GAS</string>
     <string name="action_brake">REV</string>
-    <string name="label_controls_hint">Drag screen to look · Walk inside 3 houses · Drive cars on roads or sail boats in the sea</string>
+    <string name="label_controls_hint">Punch &amp; kick in combos · Sit anywhere · Buy guns at Vice Arms · Carjack &amp; sail boats</string>
+    <string name="voice_chat_title">SQUAD VOICE</string>
+    <string name="voice_my_peer_id">MY PEER ID</string>
+    <string name="voice_copy">COPY</string>
+    <string name="voice_copied">COPIED</string>
+    <string name="voice_peer_id_hint">Friend Peer ID</string>
+    <string name="voice_connect_button">Connect Voice</string>
+    <string name="voice_disconnect_button">End Call</string>
+    <string name="voice_mic_on">MIC ON</string>
+    <string name="voice_mic_muted">MUTED</string>
+    <string name="ai_assistant_title">NOVA · AI VOICE</string>
+    <string name="ai_assistant_subtitle">Speak or type in any language — replies in your language</string>
+    <string name="ai_tap_to_speak">TAP TO SPEAK</string>
+    <string name="ai_stop_and_ask">STOP &amp; SEND</string>
+    <string name="ai_input_hint">Ask anything in Hindi, English, Spanish...</string>
+    <string name="ai_tts_on">VOICE ON</string>
+    <string name="ai_tts_off">VOICE OFF</string>
 </resources>
