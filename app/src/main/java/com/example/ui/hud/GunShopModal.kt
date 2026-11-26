@@ -69,16 +69,17 @@ fun GunShopModal(
     contentAlignment = Alignment.Center,
   ) {
     val wideLayout = maxWidth >= 560.dp
+    val compactMobile = maxHeight <= 500.dp || maxWidth <= 950.dp
 
     Column(
       modifier =
-        Modifier.widthIn(max = if (wideLayout) 700.dp else 520.dp)
-          .clip(RoundedCornerShape(24.dp))
+        Modifier.widthIn(max = if (wideLayout) 620.dp else 460.dp)
+          .clip(RoundedCornerShape(if (compactMobile) 16.dp else 24.dp))
           .background(ViceSurfaceSolid)
-          .border(1.5.dp, GoldenHour.copy(alpha = 0.65f), RoundedCornerShape(24.dp))
+          .border(1.2.dp, GoldenHour.copy(alpha = 0.65f), RoundedCornerShape(if (compactMobile) 16.dp else 24.dp))
           .verticalScroll(rememberScrollState())
-          .padding(18.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
+          .padding(if (compactMobile) 12.dp else 18.dp),
+      verticalArrangement = Arrangement.spacedBy(if (compactMobile) 6.dp else 10.dp),
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -146,36 +147,40 @@ fun GunShopModal(
         Row(
           modifier =
             Modifier.fillMaxWidth()
-              .clip(RoundedCornerShape(16.dp))
+              .clip(RoundedCornerShape(if (compactMobile) 11.dp else 16.dp))
               .background(ViceVoid.copy(alpha = 0.65f))
               .border(
-                width = if (equipped) 1.5.dp else 1.dp,
+                width = if (equipped) 1.4.dp else 0.9.dp,
                 color =
                   when {
                     equipped -> ElectricCyan
                     owned -> PalmMint.copy(alpha = 0.45f)
                     else -> SunsetCoral.copy(alpha = 0.35f)
                   },
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(if (compactMobile) 11.dp else 16.dp),
               )
-              .padding(horizontal = 14.dp, vertical = 10.dp),
+              .padding(horizontal = if (compactMobile) 10.dp else 14.dp, vertical = if (compactMobile) 6.dp else 10.dp),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.SpaceBetween,
         ) {
           Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f).padding(end = 10.dp),
+            modifier = Modifier.weight(1f).padding(end = 8.dp),
           ) {
             Icon(
               imageVector = if (weapon == WeaponType.FISTS) Icons.Filled.SportsMma else Icons.Filled.GpsFixed,
               contentDescription = weapon.displayName,
               tint = if (equipped) ElectricCyan else GoldenHour,
-              modifier = Modifier.size(22.dp),
+              modifier = Modifier.size(if (compactMobile) 18.dp else 22.dp),
             )
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(if (compactMobile) 7.dp else 10.dp))
             Column {
               Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(weapon.displayName, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                Text(
+                  weapon.displayName,
+                  style = if (compactMobile) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
+                  color = TextPrimary,
+                )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                   text = "DMG ${weapon.damage.toInt()}${if (weapon.pelletCount > 1) "×${weapon.pelletCount}" else ""}",
@@ -183,7 +188,11 @@ fun GunShopModal(
                   color = GoldenHour,
                 )
               }
-              Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+              Text(
+                subtitle,
+                style = if (compactMobile) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+                color = TextSecondary,
+              )
             }
           }
 
@@ -201,17 +210,20 @@ fun GunShopModal(
                   },
                 contentColor = ViceVoid,
               ),
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.height(48.dp).testTag("weapon_action_${weapon.name}"),
+            shape = RoundedCornerShape(if (compactMobile) 9.dp else 12.dp),
+            contentPadding =
+              if (compactMobile) androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+              else ButtonDefaults.ContentPadding,
+            modifier = Modifier.height(if (compactMobile) 34.dp else 48.dp).testTag("weapon_action_${weapon.name}"),
           ) {
             if (equipped) {
-              Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+              Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(14.dp))
               Spacer(modifier = Modifier.width(4.dp))
-              Text("EQUIPPED", fontWeight = FontWeight.Bold)
+              Text("EQUIPPED", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
             } else if (owned) {
-              Text("EQUIP", fontWeight = FontWeight.Bold)
+              Text("EQUIP", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
             } else {
-              Text("BUY $${weapon.price}", fontWeight = FontWeight.Bold)
+              Text("BUY $${weapon.price}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
             }
           }
         }

@@ -1,0 +1,306 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Permanent cloud-backed player account and game progression",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner"
+        },
+        "playerCode": {
+          "type": "string",
+          "description": "Permanent shareable Player ID code (e.g. VH-482910)"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Player callsign shown in lobby and squad"
+        },
+        "email": {
+          "type": "string",
+          "description": "Verified account email (owner-only PII)"
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "Verified phone number (owner-only PII)"
+        },
+        "authProvider": {
+          "type": "string",
+          "enum": ["GOOGLE", "PHONE"]
+        },
+        "heroIndex": {
+          "type": "integer",
+          "description": "Selected 3D hero avatar preset index"
+        },
+        "equippedWeapon": {
+          "type": "string",
+          "description": "Equipped WeaponType enum name"
+        },
+        "ownedWeapons": {
+          "type": "array",
+          "description": "Owned WeaponType enum names"
+        },
+        "playerCash": {
+          "type": "integer",
+          "description": "Saved in-game cash balance"
+        },
+        "koCount": {
+          "type": "integer",
+          "description": "Lifetime knockouts"
+        },
+        "peerId": {
+          "type": "string",
+          "description": "Latest WebRTC PeerJS audio ID"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp via FieldValue.serverTimestamp()"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp via FieldValue.serverTimestamp()"
+        }
+      },
+      "required": [
+        "userId",
+        "playerCode",
+        "displayName",
+        "authProvider",
+        "heroIndex",
+        "equippedWeapon",
+        "playerCash",
+        "koCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "InviteCodeEntry": {
+      "title": "InviteCodeEntry",
+      "description": "Non-PII public lookup mapping permanent Player Code or live Peer ID to UID",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "playerCode": {
+          "type": "string"
+        },
+        "peerId": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "heroIndex": {
+          "type": "integer"
+        },
+        "weapon": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "playerCode",
+        "peerId",
+        "displayName",
+        "heroIndex",
+        "weapon",
+        "updatedAt"
+      ]
+    },
+    "SquadRoom": {
+      "title": "SquadRoom",
+      "description": "Shared real-time 3D lobby room and match launch state",
+      "type": "object",
+      "properties": {
+        "hostUid": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["LOBBY", "STARTED"]
+        },
+        "dropZone": {
+          "type": "string"
+        },
+        "memberUids": {
+          "type": "array"
+        },
+        "invitedUids": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "hostUid",
+        "status",
+        "dropZone",
+        "memberUids",
+        "invitedUids",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SquadMember": {
+      "title": "SquadMember",
+      "description": "Squad member state (avatar, weapon, Peer ID) synced inside a squad lobby",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "visibleUids": {
+          "type": "array"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "playerCode": {
+          "type": "string"
+        },
+        "peerId": {
+          "type": "string"
+        },
+        "heroIndex": {
+          "type": "integer"
+        },
+        "weapon": {
+          "type": "string"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "visibleUids",
+        "displayName",
+        "playerCode",
+        "peerId",
+        "heroIndex",
+        "weapon",
+        "ready",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SquadInvite": {
+      "title": "SquadInvite",
+      "description": "Real-time cross-device lobby invite triggering YES/NO popup",
+      "type": "object",
+      "properties": {
+        "senderUid": {
+          "type": "string"
+        },
+        "recipientUid": {
+          "type": "string"
+        },
+        "senderName": {
+          "type": "string"
+        },
+        "senderCode": {
+          "type": "string"
+        },
+        "senderPeerId": {
+          "type": "string"
+        },
+        "senderHeroIndex": {
+          "type": "integer"
+        },
+        "senderWeapon": {
+          "type": "string"
+        },
+        "squadId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "ACCEPTED", "DECLINED", "CANCELLED"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "senderUid",
+        "recipientUid",
+        "senderName",
+        "senderCode",
+        "senderPeerId",
+        "senderHeroIndex",
+        "senderWeapon",
+        "squadId",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VoiceSignal": {
+      "title": "VoiceSignal",
+      "description": "WebRTC SDP offer/answer/ICE signaling message between teammates in a squad room",
+      "type": "object",
+      "properties": {
+        "squadId": { "type": "string" },
+        "senderUid": { "type": "string" },
+        "recipientUid": { "type": "string" },
+        "type": { "type": "string", "enum": ["OFFER", "ANSWER", "ICE", "HANGUP"] },
+        "payload": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["squadId", "senderUid", "recipientUid", "type", "payload", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "UserAccount" },
+      "description": "Owner-isolated permanent user account, currency, weapons, and PII"
+    },
+    "/invite_codes/{codeId}": {
+      "schema": { "$ref": "InviteCodeEntry" },
+      "description": "Non-PII exact-ID lookup mapping permanent player codes and Peer IDs to UIDs"
+    },
+    "/squads/{squadId}": {
+      "schema": { "$ref": "SquadRoom" },
+      "description": "Real-time shared squad lobby room and match status"
+    },
+    "/squads/{squadId}/members/{memberUid}": {
+      "schema": { "$ref": "SquadMember" },
+      "description": "Live squad member profiles and PeerJS voice IDs inside a squad"
+    },
+    "/squad_invites/{inviteId}": {
+      "schema": { "$ref": "SquadInvite" },
+      "description": "Cross-device YES/NO squad lobby invitations"
+    },
+    "/squads/{squadId}/voice_signals/{signalId}": {
+      "schema": { "$ref": "VoiceSignal" },
+      "description": "WebRTC SDP and ICE signaling channel for squad room voice chat"
+    }
+  }
+}

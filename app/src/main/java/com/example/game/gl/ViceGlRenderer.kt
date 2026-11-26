@@ -7,12 +7,16 @@ import android.util.Log
 import com.example.game.state.BoatRuntimeState
 import com.example.game.state.DropPhase
 import com.example.game.state.GameSimulation
+import com.example.game.state.LootCategory
 import com.example.game.state.NpcReactionState
 import com.example.game.state.PedestrianRuntimeState
 import com.example.game.state.TimeOfDayPreset
 import com.example.game.state.VehicleRuntimeState
+import com.example.game.state.WeaponType
+import com.example.game.state.WorldLootItem
 import com.example.game.world.CartoonPresets
 import com.example.game.world.MaterialSurface
+import com.example.game.world.TerrainHeightfield
 import com.example.game.world.TreeKind
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -43,13 +47,21 @@ class ViceGlRenderer(
   private lateinit var rightWingMesh: Mesh
   private lateinit var skyMesh: Mesh
   private lateinit var waterOceanMesh: Mesh
+  private lateinit var terrainChunks: List<Mesh>
+  private lateinit var gabledRoofMesh: Mesh
+  private lateinit var coneMesh: Mesh
+  private lateinit var boulderMesh: Mesh
+  private lateinit var domeMesh: Mesh
   private lateinit var characterRenderer: CartoonCharacterRenderer
+  private lateinit var expandedRenderer: ExpandedWorldRenderer
 
   private var shadowFbo = 0
   private var shadowDepthTex = 0
   private var shadowColorRb = 0
   private var hasShadowMap = false
   private var surfaceReady = false
+  private var worldInitStage = 0
+  private var glVersionCached = ""
   private val shadowSize = 1024
 
   private var viewWidth = 1280
@@ -78,24 +90,36 @@ class ViceGlRenderer(
   private val lobbyRingGold = floatArrayOf(1.0f, 0.78f, 0.24f)
   private val lobbyRingCyan = floatArrayOf(0.18f, 0.90f, 0.96f)
 
-  private fun currentPlayerAppearance() =
-    GameSimulation.HERO_PRESETS.getOrElse(sim.heroPresetIndex) { "HERO" to playerAppearance }.second
+  private fun currentPlayerAppearance() = sim.currentHeroAppearance()
 
   override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
     surfaceReady = false
     hasShadowMap = false
+    worldInitStage = 0
     try {
-      val version = GLES20.glGetString(GLES20.GL_VERSION).orEmpty()
+      glVersionCached = GLES20.glGetString(GLES20.GL_VERSION).orEmpty()
       val renderer = GLES20.glGetString(GLES20.GL_RENDERER).orEmpty()
-      Log.i("ViceGL", "GL_VERSION=$version | GL_RENDERER=$renderer")
+      Log.i("ViceGL", "GL_VERSION=$glVersionCached | GL_RENDERER=$renderer")
 
       GLES20.glEnable(GLES20.GL_DEPTH_TEST)
       GLES20.glEnable(GLES20.GL_CULL_FACE)
       GLES20.glCullFace(GLES20.GL_BACK)
 
+      // Fast minimal boot so Frame 1 swaps buffers immediately and satisfies Android SurfaceSyncGroup
+      skyShader = ShaderProgram(ViceShaders.SKY_VERTEX, ViceShaders.SKY_FRAGMENT)
+      skyMesh = MeshBuilder.createSphere(rings = 16, sectors = 24, inverted = true)
+      lastFrameNs = System.nanoTime()
+      surfaceReady = true
+    } catch (t: Throwable) {
+      Log.e("ViceGL", "Failed in onSurfaceCreated", t)
+      surfaceReady = false
+    }
+  }
+
+  private fun completeDeferredSceneInit() {
+    try {
       worldShader = ShaderProgram(ViceShaders.WORLD_VERTEX, ViceShaders.WORLD_FRAGMENT)
       shadowShader = ShaderProgram(ViceShaders.SHADOW_VERTEX, ViceShaders.SHADOW_FRAGMENT)
-      skyShader = ShaderProgram(ViceShaders.SKY_VERTEX, ViceShaders.SKY_FRAGMENT)
       waterShader = ShaderProgram(ViceShaders.WATER_VERTEX, ViceShaders.WATER_FRAGMENT)
 
       boxMesh = MeshBuilder.createUnitBox()
@@ -106,20 +130,40 @@ class ViceGlRenderer(
       boatHullMesh = MeshBuilder.createBoatHull()
       leftWingMesh = MeshBuilder.createSweptWing(rightSide = false)
       rightWingMesh = MeshBuilder.createSweptWing(rightSide = true)
-      skyMesh = MeshBuilder.createSphere(rings = 16, sectors = 24, inverted = true)
-      waterOceanMesh = MeshBuilder.createWaterPlane(size = 920f, grid = 36)
+      waterOceanMesh = MeshBuilder.createWaterPlane(size = 980f, grid = 48)
+      terrainChunks =
+        listOf(
+          MeshBuilder.createTerrainChunkMesh(-300f, 0f, -300f, 0f, segsX = 68, segsZ = 68),
+          MeshBuilder.createTerrainChunkMesh(0f, 300f, -300f, 0f, segsX = 68, segsZ = 68),
+          MeshBuilder.createTerrainChunkMesh(-300f, 0f, 0f, 300f, segsX = 68, segsZ = 68),
+          MeshBuilder.createTerrainChunkMesh(0f, 300f, 0f, 300f, segsX = 68, segsZ = 68),
+        )
+      gabledRoofMesh = MeshBuilder.createGabledRoofMesh()
+      coneMesh = MeshBuilder.createConeMesh(segments = 12)
+      boulderMesh = MeshBuilder.createRuggedBoulderMesh()
+      domeMesh = MeshBuilder.createDomeMesh(rings = 8, sectors = 18)
       val characterMeshes = CharacterMeshBuilder.CharacterMeshes(boxMesh, cylinderMesh, sphereMesh)
       characterRenderer = CartoonCharacterRenderer(characterMeshes)
+      expandedRenderer =
+        ExpandedWorldRenderer(
+          boxMesh = boxMesh,
+          cylinderMesh = cylinderMesh,
+          sphereMesh = sphereMesh,
+          leftWingMesh = leftWingMesh,
+          rightWingMesh = rightWingMesh,
+          characterRenderer = characterRenderer,
+        )
 
-      initShadowFbo(version)
-      lastFrameNs = System.nanoTime()
+      initShadowFbo(glVersionCached)
       surfaceReady = ::worldShader.isInitialized && worldShader.programId != 0
+      worldInitStage = 2
+      lastFrameNs = System.nanoTime()
       Log.i(
         "ViceGL",
         "Shaders ready: world=${worldShader.programId}, sky=${skyShader.programId}, water=${waterShader.programId}, shadow=$hasShadowMap",
       )
     } catch (t: Throwable) {
-      Log.e("ViceGL", "Failed in onSurfaceCreated", t)
+      Log.e("ViceGL", "Failed in completeDeferredSceneInit", t)
       surfaceReady = false
     }
   }
@@ -215,6 +259,48 @@ class ViceGlRenderer(
   }
 
   override fun onDrawFrame(gl: GL10?) {
+    if (!surfaceReady) {
+      GLES20.glClearColor(0.08f, 0.06f, 0.14f, 1f)
+      GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+      return
+    }
+
+    if (worldInitStage == 0) {
+      // Frame 1: fast twilight sky clear + swap so SurfaceView SurfaceSyncGroup completes in <30ms
+      try {
+        updateAtmosphere()
+        val aspect = (viewWidth.toFloat() / viewHeight.coerceAtLeast(1).toFloat()).coerceIn(0.25f, 4.0f)
+        Matrix.perspectiveM(projMat, 0, sim.camFovDeg.coerceIn(15f, 110f), aspect, 0.25f, 600f)
+        Matrix.setLookAtM(
+          viewMat,
+          0,
+          sim.camPos.x,
+          sim.camPos.y,
+          sim.camPos.z,
+          sim.camLookAt.x,
+          sim.camLookAt.y,
+          sim.camLookAt.z,
+          0f,
+          1f,
+          0f,
+        )
+        GLES20.glViewport(0, 0, viewWidth, viewHeight)
+        GLES20.glClearColor(skyHorizon[0], skyHorizon[1], skyHorizon[2], 1f)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+        drawSkyDome()
+      } catch (t: Throwable) {
+        Log.e("ViceGL", "First frame clear error", t)
+      }
+      worldInitStage = 1
+      lastFrameNs = System.nanoTime()
+      return
+    }
+
+    if (worldInitStage == 1) {
+      completeDeferredSceneInit()
+      if (!surfaceReady || worldInitStage < 2) return
+    }
+
     val now = System.nanoTime()
     val dt = ((now - lastFrameNs) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
     lastFrameNs = now
@@ -226,18 +312,12 @@ class ViceGlRenderer(
       onHudTick()
     }
 
-    if (!surfaceReady) {
-      GLES20.glClearColor(0.08f, 0.06f, 0.14f, 1f)
-      GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
-      return
-    }
-
     try {
       updateAtmosphere()
 
       val aspect = (viewWidth.toFloat() / viewHeight.coerceAtLeast(1).toFloat()).coerceIn(0.25f, 4.0f)
       val fov = sim.camFovDeg.coerceIn(15f, 110f)
-      Matrix.perspectiveM(projMat, 0, fov, aspect, 0.25f, 600f)
+      Matrix.perspectiveM(projMat, 0, fov, aspect, 0.25f, 820f)
       Matrix.setLookAtM(
         viewMat,
         0,
@@ -256,13 +336,13 @@ class ViceGlRenderer(
       val focusX =
         when {
           !sim.isPlaying -> 0f
-          sim.dropPhase != DropPhase.GROUND -> sim.camLookAt.x
+          sim.dropPhase != DropPhase.GROUND || sim.isSpectatingKiller -> sim.camLookAt.x
           else -> sim.playerX
         }
       val focusZ =
         when {
           !sim.isPlaying -> 0f
-          sim.dropPhase != DropPhase.GROUND -> sim.camLookAt.z
+          sim.dropPhase != DropPhase.GROUND || sim.isSpectatingKiller -> sim.camLookAt.z
           else -> sim.playerZ
         }
       Matrix.setLookAtM(
@@ -338,6 +418,16 @@ class ViceGlRenderer(
         nightFactor = 0.90f
       }
     }
+    val storm = sim.livingWorld.weatherMode.stormFactor
+    val flash = sim.livingWorld.lightningFlash
+    if (storm > 0.01f || flash > 0.01f) {
+      val darken = 1f - storm * 0.42f
+      for (i in 0..2) {
+        skyZenith[i] = (skyZenith[i] * darken + flash * 0.45f).coerceIn(0f, 1f)
+        skyHorizon[i] = (skyHorizon[i] * darken + flash * 0.48f).coerceIn(0f, 1f)
+        sunColor[i] = (sunColor[i] * (1f - storm * 0.32f) + flash * 0.35f).coerceIn(0f, 1.4f)
+      }
+    }
   }
 
   private fun drawSkyDome() {
@@ -383,42 +473,59 @@ class ViceGlRenderer(
     }
 
     for (tree in sim.world.trees) {
-      if (tree.kind == TreeKind.PALM) {
-        GLES20.glUniform1f(uWind, 0f)
-        setBoxModel(tree.x, tree.height * 0.45f, tree.z, 0.42f, tree.height * 0.9f, 0.42f, tree.yawDeg)
-        Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
-        GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
-        cylinderMesh.draw()
-
-        GLES20.glUniform1f(uWind, 1.0f)
-        for (i in 0 until 7) {
-          val a = tree.yawDeg + i * (360f / 7f)
-          Matrix.setIdentityM(modelMat, 0)
-          Matrix.translateM(modelMat, 0, tree.x, tree.height * 0.88f, tree.z)
-          Matrix.rotateM(modelMat, 0, a, 0f, 1f, 0f)
+      val groundY = TerrainHeightfield.elevationAt(tree.x, tree.z)
+      when (tree.kind) {
+        TreeKind.PALM -> {
+          GLES20.glUniform1f(uWind, 0f)
+          setBoxModel(tree.x, groundY + tree.height * 0.45f, tree.z, 0.42f, tree.height * 0.9f, 0.42f, tree.yawDeg)
           Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
           GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
-          palmFrondMesh.draw()
-        }
-      } else {
-        GLES20.glUniform1f(uWind, 0f)
-        setBoxModel(tree.x, tree.height * 0.28f, tree.z, 0.55f, tree.height * 0.56f, 0.55f, tree.yawDeg)
-        Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
-        GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
-        cylinderMesh.draw()
+          cylinderMesh.draw()
 
-        GLES20.glUniform1f(uWind, 0.4f)
-        setBoxModel(tree.x, tree.height * 0.68f, tree.z, 3.6f, 3.0f, 3.6f, tree.yawDeg)
-        Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
-        GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
-        sphereMesh.draw()
+          GLES20.glUniform1f(uWind, 1.0f)
+          for (i in 0 until 7) {
+            val a = tree.yawDeg + i * (360f / 7f)
+            Matrix.setIdentityM(modelMat, 0)
+            Matrix.translateM(modelMat, 0, tree.x, groundY + tree.height * 0.88f, tree.z)
+            Matrix.rotateM(modelMat, 0, a, 0f, 1f, 0f)
+            Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
+            GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
+            palmFrondMesh.draw()
+          }
+        }
+        TreeKind.PINE_CONIFER -> {
+          GLES20.glUniform1f(uWind, 0f)
+          setBoxModel(tree.x, groundY + tree.height * 0.25f, tree.z, 0.44f, tree.height * 0.50f, 0.44f, tree.yawDeg)
+          Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
+          GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
+          cylinderMesh.draw()
+
+          GLES20.glUniform1f(uWind, 0.35f)
+          setBoxModel(tree.x, groundY + tree.height * 0.65f, tree.z, 3.3f, tree.height * 0.56f, 3.3f, tree.yawDeg)
+          Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
+          GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
+          coneMesh.draw()
+        }
+        else -> {
+          GLES20.glUniform1f(uWind, 0f)
+          setBoxModel(tree.x, groundY + tree.height * 0.28f, tree.z, 0.55f, tree.height * 0.56f, 0.55f, tree.yawDeg)
+          Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
+          GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
+          cylinderMesh.draw()
+
+          GLES20.glUniform1f(uWind, 0.4f)
+          setBoxModel(tree.x, groundY + tree.height * 0.68f, tree.z, 3.6f, 3.0f, 3.6f, tree.yawDeg)
+          Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
+          GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
+          sphereMesh.draw()
+        }
       }
     }
 
     GLES20.glUniform1f(uWind, 0f)
     for (v in sim.vehicles) {
       Matrix.setIdentityM(modelMat, 0)
-      Matrix.translateM(modelMat, 0, v.x, 0.04f, v.z)
+      Matrix.translateM(modelMat, 0, v.x, v.y + 0.04f, v.z)
       Matrix.rotateM(modelMat, 0, Math.toDegrees(v.yawRad.toDouble()).toFloat(), 0f, 1f, 0f)
       Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
       GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
@@ -457,7 +564,19 @@ class ViceGlRenderer(
     GLES20.glUniform1f(uAlpha, 1.0f)
     GLES20.glUniform1f(uWind, 0f)
 
-    // 1. Static Boxes & Static Cylinders (Gazebos, Water Tanks, Water Tower)
+    // 0. Continuous 3D Undulating Terrain Heightfield Chunks
+    Matrix.setIdentityM(modelMat, 0)
+    GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+    GLES20.glUniform3fv(uBaseColor, 1, floatArrayOf(0.26f, 0.48f, 0.24f), 0)
+    GLES20.glUniform1i(uMaterialType, MaterialSurface.TERRAIN.id)
+    GLES20.glUniform1f(uEmissive, 0f)
+    GLES20.glUniform1f(uMetallic, 0f)
+    GLES20.glUniform1f(uRoughness, 0.90f)
+    for (chunk in terrainChunks) {
+      chunk.draw()
+    }
+
+    // 1. Static Boxes & Static Cylinders (Gazebos, Water Tanks, Water Tower, POI Foundations)
     for (box in sim.world.staticBoxes) {
       if (box.surface == MaterialSurface.WATER) continue
       setBoxModel(box.cx, box.cy, box.cz, box.sx, box.sy, box.sz, box.yawDeg)
@@ -480,109 +599,228 @@ class ViceGlRenderer(
       cylinderMesh.draw()
     }
 
-    // 2. Palm Trees & Tropical Shade Trees
+    // 1B. Pitched Gabled Roofs (Farmtopia Barn, Cottages, Watchtowers, Rust Hangar)
+    GLES20.glUniform1f(uEmissive, 0f)
+    GLES20.glUniform1f(uMetallic, 0.08f)
+    GLES20.glUniform1f(uRoughness, 0.62f)
+    for (roof in sim.world.gabledRoofs) {
+      setBoxModel(roof.cx, roof.cy, roof.cz, roof.width, roof.height, roof.length, roof.yawDeg)
+      GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+      GLES20.glUniform3fv(uBaseColor, 1, roof.color, 0)
+      GLES20.glUniform1i(uMaterialType, roof.surface.id)
+      gabledRoofMesh.draw()
+    }
+
+    // 1C. Rugged Rocky Boulder Outcrops
+    GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
+    GLES20.glUniform1f(uMetallic, 0.02f)
+    GLES20.glUniform1f(uRoughness, 0.92f)
+    for (boulder in sim.world.boulders) {
+      Matrix.setIdentityM(modelMat, 0)
+      Matrix.translateM(modelMat, 0, boulder.x, boulder.y, boulder.z)
+      Matrix.rotateM(modelMat, 0, boulder.yawDeg, 0f, 1f, 0f)
+      Matrix.rotateM(modelMat, 0, boulder.pitchDeg, 1f, 0f, 0f)
+      Matrix.scaleM(modelMat, 0, boulder.rx * 2f, boulder.ry * 2f, boulder.rz * 2f)
+      GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+      GLES20.glUniform3fv(uBaseColor, 1, boulder.color, 0)
+      boulderMesh.draw()
+    }
+
+    // 1D. Spinning Wind Turbines on Coastal Bluffs
+    val whiteTower = floatArrayOf(0.92f, 0.94f, 0.96f)
+    val darkHub = floatArrayOf(0.22f, 0.25f, 0.30f)
+    for ((idx, wt) in sim.world.windTurbines.withIndex()) {
+      GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
+      GLES20.glUniform1f(uMetallic, 0.55f)
+      GLES20.glUniform1f(uRoughness, 0.30f)
+      GLES20.glUniform3fv(uBaseColor, 1, whiteTower, 0)
+      setBoxModel(wt.x, wt.y + wt.towerHeight * 0.5f, wt.z, 0.85f, wt.towerHeight, 0.85f, wt.yawDeg)
+      GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+      cylinderMesh.draw()
+
+      val nacelleBase = FloatArray(16)
+      Matrix.setIdentityM(nacelleBase, 0)
+      Matrix.translateM(nacelleBase, 0, wt.x, wt.y + wt.towerHeight, wt.z)
+      Matrix.rotateM(nacelleBase, 0, wt.yawDeg, 0f, 1f, 0f)
+      drawChildBox(nacelleBase, 0f, 0f, 0f, 1.05f, 1.05f, 2.5f, uModel)
+      GLES20.glUniform3fv(uBaseColor, 1, darkHub, 0)
+      boxMesh.draw()
+
+      val spinDeg = (sim.worldTimeSec * 48f + idx * 120f) % 360f
+      GLES20.glUniform3fv(uBaseColor, 1, whiteTower, 0)
+      for (b in 0 until 3) {
+        Matrix.setIdentityM(tmpMat, 0)
+        Matrix.translateM(tmpMat, 0, 0f, 0f, 1.32f)
+        Matrix.rotateM(tmpMat, 0, spinDeg + b * 120f, 0f, 0f, 1f)
+        Matrix.translateM(tmpMat, 0, 0f, wt.bladeRadius * 0.5f, 0f)
+        Matrix.scaleM(tmpMat, 0, 0.32f, wt.bladeRadius, 0.12f)
+        Matrix.multiplyMM(modelMat, 0, nacelleBase, 0, tmpMat, 0)
+        GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+        boxMesh.draw()
+      }
+    }
+
+    // 2. Diverse Tree Species (Palm, Shade, Pine Conifer, Cypress/Acacia) seated on 3D terrain!
     val trunkColor = floatArrayOf(0.46f, 0.34f, 0.24f)
+    val pineTrunk = floatArrayOf(0.36f, 0.25f, 0.18f)
     val palmGreen = floatArrayOf(0.18f, 0.56f, 0.24f)
     val shadeGreen1 = floatArrayOf(0.16f, 0.50f, 0.22f)
     val shadeGreen2 = floatArrayOf(0.22f, 0.58f, 0.26f)
+    val pineGreen1 = floatArrayOf(0.12f, 0.36f, 0.19f)
+    val pineGreen2 = floatArrayOf(0.16f, 0.43f, 0.22f)
+    val acaciaGreen = floatArrayOf(0.28f, 0.50f, 0.18f)
 
     for (tree in sim.world.trees) {
-      if (tree.kind == TreeKind.PALM) {
-        GLES20.glUniform1f(uWind, 0f)
-        GLES20.glUniform1i(uMaterialType, MaterialSurface.WOOD.id)
-        GLES20.glUniform1f(uEmissive, 0f)
-        GLES20.glUniform1f(uMetallic, 0f)
-        GLES20.glUniform1f(uRoughness, 0.85f)
-        GLES20.glUniform3fv(uBaseColor, 1, trunkColor, 0)
+      val baseY = TerrainHeightfield.elevationAt(tree.x, tree.z) - 0.15f
+      when (tree.kind) {
+        TreeKind.PALM -> {
+          GLES20.glUniform1f(uWind, 0f)
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.WOOD.id)
+          GLES20.glUniform1f(uEmissive, 0f)
+          GLES20.glUniform1f(uMetallic, 0f)
+          GLES20.glUniform1f(uRoughness, 0.85f)
+          GLES20.glUniform3fv(uBaseColor, 1, trunkColor, 0)
 
-        val segH = tree.height * 0.24f
-        val leanDir = Math.toRadians(tree.yawDeg.toDouble()).toFloat()
-        var curX = tree.x
-        var curZ = tree.z
-        var curY = 0f
-        for (s in 0 until 4) {
-          val radius = 0.42f - s * 0.055f
-          val lean = s * 0.20f
-          curX += sin(leanDir) * lean * 0.35f
-          curZ += cos(leanDir) * lean * 0.35f
-          Matrix.setIdentityM(modelMat, 0)
-          Matrix.translateM(modelMat, 0, curX, curY + segH * 0.5f, curZ)
-          Matrix.rotateM(modelMat, 0, tree.yawDeg, 0f, 1f, 0f)
-          Matrix.rotateM(modelMat, 0, s * 2.5f, 1f, 0f, 0f)
-          Matrix.scaleM(modelMat, 0, radius, segH * 1.05f, radius)
+          val segH = tree.height * 0.24f
+          val leanDir = Math.toRadians(tree.yawDeg.toDouble()).toFloat()
+          var curX = tree.x
+          var curZ = tree.z
+          var curY = baseY
+          for (s in 0 until 4) {
+            val radius = 0.42f - s * 0.055f
+            val lean = s * 0.20f
+            curX += sin(leanDir) * lean * 0.35f
+            curZ += cos(leanDir) * lean * 0.35f
+            Matrix.setIdentityM(modelMat, 0)
+            Matrix.translateM(modelMat, 0, curX, curY + segH * 0.5f, curZ)
+            Matrix.rotateM(modelMat, 0, tree.yawDeg, 0f, 1f, 0f)
+            Matrix.rotateM(modelMat, 0, s * 2.5f, 1f, 0f, 0f)
+            Matrix.scaleM(modelMat, 0, radius, segH * 1.05f, radius)
+            GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+            cylinderMesh.draw()
+            curY += segH * 0.96f
+          }
+
+          GLES20.glDisable(GLES20.GL_CULL_FACE)
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.FOLIAGE.id)
+          GLES20.glUniform3fv(uBaseColor, 1, palmGreen, 0)
+          GLES20.glUniform1f(uRoughness, 0.62f)
+          GLES20.glUniform1f(uWind, 1.0f)
+
+          for (i in 0 until 8) {
+            val frondYaw = tree.yawDeg + i * 45f
+            val scale = 0.85f + (i % 2) * 0.22f
+            Matrix.setIdentityM(modelMat, 0)
+            Matrix.translateM(modelMat, 0, curX, curY, curZ)
+            Matrix.rotateM(modelMat, 0, frondYaw, 0f, 1f, 0f)
+            Matrix.rotateM(modelMat, 0, if (i % 2 == 0) -14f else 6f, 1f, 0f, 0f)
+            Matrix.scaleM(modelMat, 0, scale, scale, scale)
+            GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+            palmFrondMesh.draw()
+          }
+          GLES20.glEnable(GLES20.GL_CULL_FACE)
+        }
+        TreeKind.PINE_CONIFER -> {
+          GLES20.glUniform1f(uWind, 0f)
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.WOOD.id)
+          GLES20.glUniform1f(uEmissive, 0f)
+          GLES20.glUniform1f(uMetallic, 0f)
+          GLES20.glUniform1f(uRoughness, 0.88f)
+          GLES20.glUniform3fv(uBaseColor, 1, pineTrunk, 0)
+          setBoxModel(tree.x, baseY + tree.height * 0.24f, tree.z, 0.48f, tree.height * 0.48f, 0.48f, tree.yawDeg)
           GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
           cylinderMesh.draw()
-          curY += segH * 0.96f
+
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.FOLIAGE.id)
+          GLES20.glUniform1f(uRoughness, 0.72f)
+          GLES20.glUniform1f(uWind, 0.30f)
+          val tiers =
+            arrayOf(
+              floatArrayOf(tree.height * 0.44f, 3.8f, tree.height * 0.34f),
+              floatArrayOf(tree.height * 0.64f, 2.9f, tree.height * 0.32f),
+              floatArrayOf(tree.height * 0.84f, 1.9f, tree.height * 0.28f),
+            )
+          tiers.forEachIndexed { idx, t ->
+            GLES20.glUniform3fv(uBaseColor, 1, if (idx == 2) pineGreen2 else pineGreen1, 0)
+            setBoxModel(tree.x, baseY + t[0], tree.z, t[1], t[2], t[1], tree.yawDeg)
+            GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+            coneMesh.draw()
+          }
         }
-
-        GLES20.glDisable(GLES20.GL_CULL_FACE)
-        GLES20.glUniform1i(uMaterialType, MaterialSurface.FOLIAGE.id)
-        GLES20.glUniform3fv(uBaseColor, 1, palmGreen, 0)
-        GLES20.glUniform1f(uRoughness, 0.62f)
-        GLES20.glUniform1f(uWind, 1.0f)
-
-        for (i in 0 until 8) {
-          val frondYaw = tree.yawDeg + i * 45f
-          val scale = 0.85f + (i % 2) * 0.22f
-          Matrix.setIdentityM(modelMat, 0)
-          Matrix.translateM(modelMat, 0, curX, curY, curZ)
-          Matrix.rotateM(modelMat, 0, frondYaw, 0f, 1f, 0f)
-          Matrix.rotateM(modelMat, 0, if (i % 2 == 0) -14f else 6f, 1f, 0f, 0f)
-          Matrix.scaleM(modelMat, 0, scale, scale, scale)
+        TreeKind.CYPRESS_ACACIA -> {
+          GLES20.glUniform1f(uWind, 0f)
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.WOOD.id)
+          GLES20.glUniform1f(uEmissive, 0f)
+          GLES20.glUniform1f(uMetallic, 0f)
+          GLES20.glUniform1f(uRoughness, 0.86f)
+          GLES20.glUniform3fv(uBaseColor, 1, trunkColor, 0)
+          setBoxModel(tree.x, baseY + tree.height * 0.28f, tree.z, 0.44f, tree.height * 0.58f, 0.44f, tree.yawDeg)
           GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
-          palmFrondMesh.draw()
-        }
-        GLES20.glEnable(GLES20.GL_CULL_FACE)
-      } else {
-        GLES20.glUniform1f(uWind, 0f)
-        GLES20.glUniform1i(uMaterialType, MaterialSurface.WOOD.id)
-        GLES20.glUniform1f(uEmissive, 0f)
-        GLES20.glUniform1f(uMetallic, 0f)
-        GLES20.glUniform1f(uRoughness, 0.85f)
-        GLES20.glUniform3fv(uBaseColor, 1, trunkColor, 0)
+          cylinderMesh.draw()
 
-        setBoxModel(tree.x, tree.height * 0.26f, tree.z, 0.56f, tree.height * 0.54f, 0.56f, tree.yawDeg)
-        GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
-        cylinderMesh.draw()
-
-        GLES20.glUniform1i(uMaterialType, MaterialSurface.FOLIAGE.id)
-        GLES20.glUniform1f(uRoughness, 0.70f)
-        GLES20.glUniform1f(uWind, 0.45f)
-
-        val crownY = tree.height * 0.64f
-        val puffs =
-          arrayOf(
-            floatArrayOf(0f, 0.35f, 0f, 3.6f, 2.8f, 3.6f),
-            floatArrayOf(-1.1f, -0.15f, 0.7f, 2.5f, 2.2f, 2.5f),
-            floatArrayOf(1.1f, -0.10f, -0.6f, 2.6f, 2.2f, 2.6f),
-          )
-        puffs.forEachIndexed { idx, p ->
-          GLES20.glUniform3fv(uBaseColor, 1, if (idx == 0) shadeGreen1 else shadeGreen2, 0)
-          setBoxModel(tree.x + p[0], crownY + p[1], tree.z + p[2], p[3], p[4], p[5], tree.yawDeg)
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.FOLIAGE.id)
+          GLES20.glUniform1f(uRoughness, 0.68f)
+          GLES20.glUniform1f(uWind, 0.42f)
+          GLES20.glUniform3fv(uBaseColor, 1, acaciaGreen, 0)
+          setBoxModel(tree.x, baseY + tree.height * 0.64f, tree.z, 5.2f, 1.45f, 4.8f, tree.yawDeg)
           GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
           sphereMesh.draw()
+          setBoxModel(tree.x + 1.2f, baseY + tree.height * 0.72f, tree.z - 0.8f, 3.2f, 1.15f, 3.0f, tree.yawDeg)
+          GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+          sphereMesh.draw()
+        }
+        TreeKind.TROPICAL_SHADE -> {
+          GLES20.glUniform1f(uWind, 0f)
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.WOOD.id)
+          GLES20.glUniform1f(uEmissive, 0f)
+          GLES20.glUniform1f(uMetallic, 0f)
+          GLES20.glUniform1f(uRoughness, 0.85f)
+          GLES20.glUniform3fv(uBaseColor, 1, trunkColor, 0)
+
+          setBoxModel(tree.x, baseY + tree.height * 0.26f, tree.z, 0.56f, tree.height * 0.54f, 0.56f, tree.yawDeg)
+          GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+          cylinderMesh.draw()
+
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.FOLIAGE.id)
+          GLES20.glUniform1f(uRoughness, 0.70f)
+          GLES20.glUniform1f(uWind, 0.45f)
+
+          val crownY = baseY + tree.height * 0.64f
+          val puffs =
+            arrayOf(
+              floatArrayOf(0f, 0.35f, 0f, 3.6f, 2.8f, 3.6f),
+              floatArrayOf(-1.1f, -0.15f, 0.7f, 2.5f, 2.2f, 2.5f),
+              floatArrayOf(1.1f, -0.10f, -0.6f, 2.6f, 2.2f, 2.6f),
+            )
+          puffs.forEachIndexed { idx, p ->
+            GLES20.glUniform3fv(uBaseColor, 1, if (idx == 0) shadeGreen1 else shadeGreen2, 0)
+            setBoxModel(tree.x + p[0], crownY + p[1], tree.z + p[2], p[3], p[4], p[5], tree.yawDeg)
+            GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+            sphereMesh.draw()
+          }
         }
       }
     }
 
-    // 3. Streetlights
+    // 3. Streetlights seated on local TerrainHeightfield elevation
     GLES20.glUniform1f(uWind, 0f)
     val poleColor = floatArrayOf(0.18f, 0.20f, 0.26f)
     for (sl in sim.world.streetLights) {
+      val baseY = TerrainHeightfield.elevationAt(sl.x, sl.z)
       GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
       GLES20.glUniform1f(uEmissive, 0f)
       GLES20.glUniform1f(uMetallic, 0.6f)
       GLES20.glUniform1f(uRoughness, 0.35f)
       GLES20.glUniform3fv(uBaseColor, 1, poleColor, 0)
 
-      setBoxModel(sl.x, 2.75f, sl.z, 0.22f, 5.5f, 0.22f, sl.yawDeg)
+      setBoxModel(sl.x, baseY + 2.75f, sl.z, 0.22f, 5.5f, 0.22f, sl.yawDeg)
       GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
       cylinderMesh.draw()
 
       val rad = Math.toRadians(sl.yawDeg.toDouble()).toFloat()
       val armX = sl.x + sin(rad) * 0.75f
       val armZ = sl.z + cos(rad) * 0.75f
-      setBoxModel(armX, 5.45f, armZ, 0.24f, 0.16f, 1.5f, sl.yawDeg)
+      setBoxModel(armX, baseY + 5.45f, armZ, 0.24f, 0.16f, 1.5f, sl.yawDeg)
       GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
       boxMesh.draw()
 
@@ -591,7 +829,7 @@ class ViceGlRenderer(
       GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
       GLES20.glUniform1f(uEmissive, 0.45f + nightFactor * 0.65f)
       GLES20.glUniform3fv(uBaseColor, 1, sl.neonColor, 0)
-      setBoxModel(lampX, 5.34f, lampZ, 0.48f, 0.16f, 0.52f, sl.yawDeg)
+      setBoxModel(lampX, baseY + 5.34f, lampZ, 0.48f, 0.16f, 0.52f, sl.yawDeg)
       GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
       boxMesh.draw()
     }
@@ -620,11 +858,18 @@ class ViceGlRenderer(
     GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
     boxMesh.draw()
 
+    // 5C. Collectible 3D House & Drop Loot Items (Guns, Medkits, Coins, Lv.3/4 Vests & Helmets)
+    drawWorldLootItems(uModel, uBaseColor, uMaterialType, uEmissive, uMetallic, uRoughness)
+
     // 6. Townsfolk & Active Companions (Strolling, Panicking/Fleeing, Fighting Back, Companion, or Knocked Down)
     val inAnyVehicle = (sim.activeVehicle != null || sim.activeBoat != null)
     val companionRingColor = floatArrayOf(0.20f, 0.94f, 0.72f)
+    val rivalRingColor = floatArrayOf(1.0f, 0.26f, 0.28f)
     for (ped in sim.pedestrians) {
-      if (ped.isFriend && inAnyVehicle && ped.reactionState != NpcReactionState.KNOCKED_DOWN) {
+      if (
+        (ped.isFriend && inAnyVehicle && ped.reactionState != NpcReactionState.KNOCKED_DOWN) ||
+          ped.drivingVehicleId != null
+      ) {
         continue
       }
       val pedFleeing = ped.reactionState == NpcReactionState.FLEEING
@@ -654,6 +899,14 @@ class ViceGlRenderer(
         GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
         cylinderMesh.draw()
         GLES20.glUniform1f(uEmissive, 0f)
+      } else if (ped.isRivalFighter && ped.reactionState != NpcReactionState.KNOCKED_DOWN) {
+        GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+        GLES20.glUniform1f(uEmissive, if (pedFighting) 1.05f else 0.55f)
+        GLES20.glUniform3fv(uBaseColor, 1, rivalRingColor, 0)
+        setBoxModel(ped.x, ped.y + 0.06f, ped.z, 1.10f, 0.03f, 1.10f, sim.worldTimeSec * 55f)
+        GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+        cylinderMesh.draw()
+        GLES20.glUniform1f(uEmissive, 0f)
       }
 
       characterRenderer.drawWalkingCharacter(
@@ -679,9 +932,22 @@ class ViceGlRenderer(
         armsUpNorm = ped.armsUpNorm,
         attackMove = if (pedFighting) ped.attackMove else null,
         attackProgress = ped.attackProgress,
+        equippedWeapon = ped.weapon,
+        aimNorm =
+          if (
+            (ped.isRivalFighter || ped.weapon != WeaponType.FISTS) &&
+              ped.reactionState == NpcReactionState.FIGHTING_BACK &&
+              ped.weapon != WeaponType.FISTS
+          ) {
+            1f
+          } else {
+            0f
+          },
         hitReactZone = ped.hitReactZone,
         hitReactProgress = (ped.hitReactTimerSec / 0.72f).coerceIn(0f, 1f),
         hitReactDirSign = ped.hitReactDirSign,
+        vestLevel = ped.vestLevel,
+        helmetLevel = ped.helmetLevel,
       )
     }
 
@@ -777,10 +1043,10 @@ class ViceGlRenderer(
         yawRad = sim.playerYawRad,
         walkCycle = sim.playerWalkCycle,
         speedNorm = sim.playerSpeedNorm,
-        isSprinting = sim.input.sprintHeld && sim.playerSpeedNorm > 0.5f,
+        isSprinting = (sim.input.sprintHeld || sim.input.autoSprint) && sim.playerSpeedNorm > 0.5f,
         isSwimming = sim.isSwimming,
         armReachNorm = sim.playerArmReachNorm,
-        fallProgress = 0f,
+        fallProgress = if (sim.isPlayerEliminated) sim.playerFallProgress else 0f,
         worldTimeSec = sim.worldTimeSec,
         appearance = heroAppearance,
         uModel = uModel,
@@ -802,6 +1068,9 @@ class ViceGlRenderer(
         airborneFallNorm = sim.airborneFallNorm,
         landingReaction = sim.activeLandingReaction,
         landingProgress = sim.landingReactionProgress,
+        vestLevel = sim.playerVestLevel,
+        helmetLevel = sim.playerHelmetLevel,
+        gunSkin = sim.equippedGunSkin,
       )
     }
 
@@ -891,6 +1160,19 @@ class ViceGlRenderer(
       )
     }
 
+    // 8D. Living World: Clouds, Express Train, Helicopters, Ambient Airplanes, Birds & Market AI Bots
+    expandedRenderer.drawOpaqueLivingEntities(
+      sim = sim,
+      uModel = uModel,
+      uBaseColor = uBaseColor,
+      uMaterialType = uMaterialType,
+      uEmissive = uEmissive,
+      uMetallic = uMetallic,
+      uRoughness = uRoughness,
+      uAlpha = uAlpha,
+      nightFactor = nightFactor,
+    )
+
     // 9. Real Flying 3D Brass Bullet Projectiles & Hot Contrails + Hit Sparks
     val bulletsSnapshot = synchronized(sim) { sim.bulletProjectiles.toList() }
     val sparksSnapshot = synchronized(sim) { sim.hitSparks.toList() }
@@ -936,12 +1218,13 @@ class ViceGlRenderer(
         Matrix.rotateM(modelMat, 0, yawDeg, 0f, 1f, 0f)
         Matrix.rotateM(modelMat, 0, pitchDeg, 1f, 0f, 0f)
         Matrix.scaleM(modelMat, 0, 0.028f, 0.028f, segLen)
+        val trailColor = if (b.fromEnemy) floatArrayOf(1.0f, 0.24f, 0.20f) else hotTrailColor
         GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
         GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
         GLES20.glUniform1f(uMetallic, 0f)
         GLES20.glUniform1f(uRoughness, 0.2f)
         GLES20.glUniform1f(uEmissive, 1.95f)
-        GLES20.glUniform3fv(uBaseColor, 1, hotTrailColor, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, trailColor, 0)
         boxMesh.draw()
       }
 
@@ -979,18 +1262,24 @@ class ViceGlRenderer(
 
     val base = FloatArray(16)
     Matrix.setIdentityM(base, 0)
-    Matrix.translateM(base, 0, car.x, 0.04f, car.z)
+    Matrix.translateM(base, 0, car.x, car.y + 0.04f, car.z)
     Matrix.rotateM(base, 0, yawDeg, 0f, 1f, 0f)
     Matrix.rotateM(base, 0, pitchDeg, 1f, 0f, 0f)
     Matrix.rotateM(base, 0, rollDeg, 0f, 0f, 1f)
 
+    val botDriver = car.driverBotId?.let { id -> sim.pedestrians.firstOrNull { it.id == id } }
+    val useCustomCarSkin = (!car.isAiTraffic && botDriver == null) || (sim.activeVehicle?.id == car.id)
+    val carSkin = if (useCustomCarSkin) sim.equippedCarSkin else com.example.game.state.CarSkin.FACTORY_DEFAULT
+    val effectiveBodyColor = carSkin.bodyColor ?: car.bodyColor
+    val effectiveTrimColor = carSkin.trimColor ?: car.trimColor
+
     // Lower sculpted aerodynamic body shell
     GLES20.glUniformMatrix4fv(uModel, 1, false, base, 0)
-    GLES20.glUniform3fv(uBaseColor, 1, car.bodyColor, 0)
+    GLES20.glUniform3fv(uBaseColor, 1, effectiveBodyColor, 0)
     GLES20.glUniform1i(uMaterialType, MaterialSurface.CAR_PAINT.id)
     GLES20.glUniform1f(uEmissive, 0f)
-    GLES20.glUniform1f(uMetallic, 0.88f)
-    GLES20.glUniform1f(uRoughness, 0.14f)
+    GLES20.glUniform1f(uMetallic, carSkin.metallic)
+    GLES20.glUniform1f(uRoughness, carSkin.roughness)
     carBodyMesh.draw()
 
     // Open-Top Targa Cockpit Interior (recessed seats, dashboard, steering wheel, roll-bar!)
@@ -1027,10 +1316,10 @@ class ViceGlRenderer(
     }
 
     // Sleek Rear Targa Roll Hoop / Pillars (leaves top & sides wide open so driver is 100% visible!)
-    GLES20.glUniform3fv(uBaseColor, 1, car.bodyColor, 0)
+    GLES20.glUniform3fv(uBaseColor, 1, effectiveBodyColor, 0)
     GLES20.glUniform1i(uMaterialType, MaterialSurface.CAR_PAINT.id)
-    GLES20.glUniform1f(uMetallic, 0.88f)
-    GLES20.glUniform1f(uRoughness, 0.14f)
+    GLES20.glUniform1f(uMetallic, carSkin.metallic)
+    GLES20.glUniform1f(uRoughness, carSkin.roughness)
     drawChildBox(base, -0.72f, 1.24f, -0.78f, 0.12f, 0.62f, 0.36f, uModel)
     boxMesh.draw()
     drawChildBox(base, 0.72f, 1.24f, -0.78f, 0.12f, 0.62f, 0.36f, uModel)
@@ -1039,7 +1328,7 @@ class ViceGlRenderer(
     boxMesh.draw()
 
     // Front Windshield A-Pillars
-    GLES20.glUniform3fv(uBaseColor, 1, car.trimColor, 0)
+    GLES20.glUniform3fv(uBaseColor, 1, effectiveTrimColor, 0)
     drawChildBox(base, -0.74f, 1.20f, 0.58f, 0.08f, 0.54f, 0.10f, uModel)
     boxMesh.draw()
     drawChildBox(base, 0.74f, 1.20f, 0.58f, 0.08f, 0.54f, 0.10f, uModel)
@@ -1047,7 +1336,17 @@ class ViceGlRenderer(
     drawChildBox(base, 0f, 1.46f, 0.48f, 1.56f, 0.07f, 0.10f, uModel)
     boxMesh.draw()
 
+    // Hood & Rear Racing Stripe when a custom CarSkin is active
+    if (carSkin != com.example.game.state.CarSkin.FACTORY_DEFAULT) {
+      GLES20.glUniform1f(uEmissive, carSkin.emissiveTrim)
+      drawChildBox(base, 0f, 0.87f, 1.28f, 0.42f, 0.03f, 1.32f, uModel)
+      boxMesh.draw()
+      drawChildBox(base, 0f, 0.94f, -1.42f, 0.42f, 0.03f, 0.94f, uModel)
+      boxMesh.draw()
+    }
+
     // Rear GT Wing Spoiler & Front Carbon Splitter
+    GLES20.glUniform1f(uEmissive, carSkin.emissiveTrim * 0.5f)
     GLES20.glUniform1f(uMetallic, 0.35f)
     GLES20.glUniform1f(uRoughness, 0.35f)
     drawChildBox(base, 0f, 1.18f, -1.96f, 1.84f, 0.08f, 0.36f, uModel)
@@ -1058,11 +1357,17 @@ class ViceGlRenderer(
     boxMesh.draw()
     drawChildBox(base, 0f, 0.20f, 2.12f, 1.88f, 0.08f, 0.24f, uModel)
     boxMesh.draw()
+    GLES20.glUniform1f(uEmissive, 0f)
 
     // Visible Seated Driver inside the Cockpit (+ Companion riding passenger seat!)
     val isPlayerInside = (sim.activeVehicle?.id == car.id)
-    if (isPlayerInside || car.isAiTraffic) {
-      val driverAppearance = if (isPlayerInside) currentPlayerAppearance() else car.appearance
+    if (isPlayerInside || car.isAiTraffic || botDriver != null) {
+      val driverAppearance =
+        when {
+          isPlayerInside -> currentPlayerAppearance()
+          botDriver != null -> botDriver.appearance
+          else -> car.appearance
+        }
       characterRenderer.drawSeatedDriver(
         parent = base,
         seatX = -0.34f,
@@ -1103,7 +1408,7 @@ class ViceGlRenderer(
 
     // Glowing Twin Headlights (+Z front)
     val headGlow =
-      if (isPlayerInside || car.isAiTraffic || nightFactor > 0.15f) 0.95f else 0.30f
+      if (isPlayerInside || car.isAiTraffic || botDriver != null || nightFactor > 0.15f) 0.95f else 0.30f
     GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
     GLES20.glUniform1f(uEmissive, headGlow)
     GLES20.glUniform3fv(uBaseColor, 1, floatArrayOf(0.84f, 0.96f, 1.0f), 0)
@@ -1143,8 +1448,10 @@ class ViceGlRenderer(
     for (wp in wheelPositions) {
       val steer = if (wp[3] > 0.5f) steerDeg else 0f
       Matrix.setIdentityM(tmpMat, 0)
-      Matrix.translateM(tmpMat, 0, car.x, 0.04f, car.z)
+      Matrix.translateM(tmpMat, 0, car.x, car.y + 0.04f, car.z)
       Matrix.rotateM(tmpMat, 0, yawDeg, 0f, 1f, 0f)
+      Matrix.rotateM(tmpMat, 0, pitchDeg, 1f, 0f, 0f)
+      Matrix.rotateM(tmpMat, 0, rollDeg, 0f, 0f, 1f)
       Matrix.translateM(tmpMat, 0, wp[0], wp[1], wp[2])
       Matrix.rotateM(tmpMat, 0, steer, 0f, 1f, 0f)
       Matrix.rotateM(tmpMat, 0, spinDeg, 1f, 0f, 0f)
@@ -1310,6 +1617,22 @@ class ViceGlRenderer(
     GLES20.glUniform3fv(waterShader.loc("uSunColor"), 1, sunColor, 0)
     GLES20.glUniform3fv(waterShader.loc("uSkyZenith"), 1, skyZenith, 0)
     GLES20.glUniform3fv(waterShader.loc("uSkyHorizon"), 1, skyHorizon, 0)
+    GLES20.glUniform1f(waterShader.loc("uWeatherStorm"), sim.livingWorld.weatherMode.stormFactor)
+    GLES20.glUniform1f(waterShader.loc("uLightning"), sim.livingWorld.lightningFlash)
+
+    val ripples = sim.livingWorld.waterRipples
+    for (idx in 0..2) {
+      val loc = waterShader.loc("uRipple$idx")
+      val r = ripples.getOrNull(ripples.size - 1 - idx)
+      if (r != null) {
+        val progress = (r.ageSec / r.maxAgeSec).coerceIn(0f, 1f)
+        val radius = 0.6f + progress * r.maxRadius
+        val fade = (1f - progress) * r.intensity
+        GLES20.glUniform4f(loc, r.x, r.z, radius, fade)
+      } else {
+        GLES20.glUniform4f(loc, 0f, 0f, 0f, 0f)
+      }
+    }
 
     Matrix.setIdentityM(modelMat, 0)
     Matrix.translateM(modelMat, 0, 0f, -0.42f, 0f)
@@ -1368,14 +1691,31 @@ class ViceGlRenderer(
     GLES20.glUniform3fv(uBaseColor, 1, windshieldTint, 0)
     for (car in sim.vehicles) {
       val yawDeg = Math.toDegrees(car.yawRad.toDouble()).toFloat()
+      val pitchDeg = Math.toDegrees(car.pitchRad.toDouble()).toFloat()
+      val rollDeg = Math.toDegrees(car.rollRad.toDouble()).toFloat()
       Matrix.setIdentityM(tmpMat, 0)
-      Matrix.translateM(tmpMat, 0, car.x, 0.04f, car.z)
+      Matrix.translateM(tmpMat, 0, car.x, car.y + 0.04f, car.z)
       Matrix.rotateM(tmpMat, 0, yawDeg, 0f, 1f, 0f)
+      Matrix.rotateM(tmpMat, 0, pitchDeg, 1f, 0f, 0f)
+      Matrix.rotateM(tmpMat, 0, rollDeg, 0f, 0f, 1f)
       Matrix.translateM(tmpMat, 0, 0f, 1.18f, 0.54f)
       Matrix.rotateM(tmpMat, 0, -34f, 1f, 0f, 0f)
       Matrix.scaleM(tmpMat, 0, 1.44f, 0.56f, 0.05f)
       GLES20.glUniformMatrix4fv(uModel, 1, false, tmpMat, 0)
       boxMesh.draw()
+    }
+
+    // Museum, Grav Labs & Intellect Center geodesic domes
+    for (dome in sim.world.domes) {
+      GLES20.glUniform1i(uMaterialType, dome.surface.id)
+      GLES20.glUniform1f(uEmissive, 0.14f)
+      GLES20.glUniform1f(uMetallic, dome.metallic)
+      GLES20.glUniform1f(uRoughness, dome.roughness)
+      GLES20.glUniform1f(uAlpha, dome.alpha)
+      GLES20.glUniform3fv(uBaseColor, 1, dome.color, 0)
+      setBoxModel(dome.cx, dome.cy, dome.cz, dome.radiusX * 2f, dome.height, dome.radiusZ * 2f, 0f)
+      GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+      domeMesh.draw()
     }
 
     // Translucent boat windshields
@@ -1391,8 +1731,53 @@ class ViceGlRenderer(
       boxMesh.draw()
     }
 
+    // Translucent Free Fire-style Gloo Wall tactical shields
+    val glooSnapshot = synchronized(sim) { sim.glooWalls.toList() }
+    val glooPlayerTint = floatArrayOf(0.24f, 0.90f, 1.0f)
+    val glooBotTint = floatArrayOf(0.18f, 0.78f, 0.96f)
+    val glooRibTint = floatArrayOf(0.84f, 0.98f, 1.0f)
+    for (gw in glooSnapshot) {
+      val hpRatio = (gw.hp / gw.maxHp.coerceAtLeast(1f)).coerceIn(0.15f, 1f)
+      val yawDeg = Math.toDegrees(gw.yawRad.toDouble()).toFloat()
+      val baseTint = if (gw.isPlayerOwned) glooPlayerTint else glooBotTint
+
+      // Main translucent ice-shield panel
+      GLES20.glUniform1i(uMaterialType, MaterialSurface.GLASS.id)
+      GLES20.glUniform1f(uEmissive, 0.25f + 0.35f * hpRatio)
+      GLES20.glUniform1f(uMetallic, 0.45f)
+      GLES20.glUniform1f(uRoughness, 0.14f)
+      GLES20.glUniform1f(uAlpha, 0.45f + 0.30f * hpRatio)
+      GLES20.glUniform3fv(uBaseColor, 1, baseTint, 0)
+      setBoxModel(gw.x, gw.y + 1.075f, gw.z, 3.30f, 2.15f, 0.24f, yawDeg)
+      GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+      boxMesh.draw()
+
+      // Glowing structural top rim & armored center brace
+      GLES20.glUniform1f(uEmissive, 0.55f + 0.35f * hpRatio)
+      GLES20.glUniform1f(uAlpha, 0.78f)
+      GLES20.glUniform3fv(uBaseColor, 1, glooRibTint, 0)
+      setBoxModel(gw.x, gw.y + 2.12f, gw.z, 3.38f, 0.12f, 0.30f, yawDeg)
+      GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+      boxMesh.draw()
+
+      setBoxModel(gw.x, gw.y + 1.05f, gw.z, 0.22f, 2.05f, 0.30f, yawDeg)
+      GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+      boxMesh.draw()
+    }
+
     GLES20.glDepthMask(true)
     GLES20.glDisable(GLES20.GL_BLEND)
+
+    expandedRenderer.drawBlendedLivingEffects(
+      sim = sim,
+      uModel = uModel,
+      uBaseColor = uBaseColor,
+      uMaterialType = uMaterialType,
+      uEmissive = uEmissive,
+      uMetallic = uMetallic,
+      uRoughness = uRoughness,
+      uAlpha = uAlpha,
+    )
   }
 
   private fun bindCommonWorldUniforms() {
@@ -1410,7 +1795,7 @@ class ViceGlRenderer(
     if (car != null && (sim.activeVehicle != null || nightFactor > 0.1f)) {
       val fx = sin(car.yawRad)
       val fz = cos(car.yawRad)
-      GLES20.glUniform3f(worldShader.loc("uHeadlightPos"), car.x + fx * 2.0f, 0.65f, car.z + fz * 2.0f)
+      GLES20.glUniform3f(worldShader.loc("uHeadlightPos"), car.x + fx * 2.0f, car.y + 0.65f, car.z + fz * 2.0f)
       GLES20.glUniform3f(worldShader.loc("uHeadlightDir"), fx, -0.14f, fz)
       GLES20.glUniform1f(worldShader.loc("uHeadlightOn"), 1f)
     } else {
@@ -1783,6 +2168,151 @@ class ViceGlRenderer(
     drawChildBox(base, 11.75f, 2.55f, -1.65f, 0.26f, 0.26f, 0.36f, uModel)
     sphereMesh.draw()
     GLES20.glUniform1f(uEmissive, 0f)
+  }
+
+  private fun drawWorldLootItems(
+    uModel: Int,
+    uBaseColor: Int,
+    uMaterialType: Int,
+    uEmissive: Int,
+    uMetallic: Int,
+    uRoughness: Int,
+  ) {
+    val lootSnapshot = synchronized(sim) { sim.worldLootItems.toList() }
+    if (lootSnapshot.isEmpty()) return
+
+    val goldColor = floatArrayOf(1.0f, 0.80f, 0.18f)
+    val cyanColor = floatArrayOf(0.18f, 0.90f, 0.98f)
+    val mintColor = floatArrayOf(0.22f, 0.94f, 0.62f)
+    val whiteColor = floatArrayOf(0.95f, 0.96f, 0.98f)
+    val redColor = floatArrayOf(0.96f, 0.20f, 0.24f)
+    val gunDark = floatArrayOf(0.14f, 0.15f, 0.19f)
+    val gunSteel = floatArrayOf(0.38f, 0.42f, 0.48f)
+    val kevlarSlate = floatArrayOf(0.18f, 0.22f, 0.30f)
+    val titanObsidian = floatArrayOf(0.12f, 0.13f, 0.18f)
+    val itemBase = FloatArray(16)
+
+    for (item in lootSnapshot) {
+      val ringColor =
+        when (item.kind.category) {
+          LootCategory.CURRENCY -> goldColor
+          LootCategory.MEDICAL -> mintColor
+          LootCategory.WEAPON -> goldColor
+          LootCategory.VEST, LootCategory.HELMET ->
+            if (item.kind.armorLevel >= 4) goldColor else cyanColor
+          LootCategory.GLOO_WALL -> cyanColor
+        }
+
+      // Ground halo ring under each loot pickup
+      val pulse = 0.5f + 0.5f * sin(sim.worldTimeSec * 4.0f + item.x)
+      GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+      GLES20.glUniform1f(uEmissive, 0.65f + pulse * 0.45f)
+      GLES20.glUniform1f(uMetallic, 0f)
+      GLES20.glUniform1f(uRoughness, 0.3f)
+      GLES20.glUniform3fv(uBaseColor, 1, ringColor, 0)
+      setBoxModel(item.x, item.y + 0.06f, item.z, 0.92f + pulse * 0.14f, 0.03f, 0.92f + pulse * 0.14f, 0f)
+      GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+      cylinderMesh.draw()
+
+      val bobY = item.y + 0.42f + sin(sim.worldTimeSec * 3.1f + item.x * 0.7f) * 0.08f
+      val spinDeg = (sim.worldTimeSec * 72f + item.z * 18f) % 360f
+      Matrix.setIdentityM(itemBase, 0)
+      Matrix.translateM(itemBase, 0, item.x, bobY, item.z)
+      Matrix.rotateM(itemBase, 0, spinDeg, 0f, 1f, 0f)
+
+      when (item.kind.category) {
+        LootCategory.CURRENCY -> {
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
+          GLES20.glUniform1f(uEmissive, 0.32f)
+          GLES20.glUniform1f(uMetallic, 0.92f)
+          GLES20.glUniform1f(uRoughness, 0.16f)
+          GLES20.glUniform3fv(uBaseColor, 1, goldColor, 0)
+          Matrix.setIdentityM(tmpMat, 0)
+          Matrix.rotateM(tmpMat, 0, 90f, 1f, 0f, 0f)
+          Matrix.scaleM(tmpMat, 0, 0.46f, 0.10f, 0.46f)
+          Matrix.multiplyMM(modelMat, 0, itemBase, 0, tmpMat, 0)
+          GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+          cylinderMesh.draw()
+        }
+        LootCategory.MEDICAL -> {
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.CAR_PAINT.id)
+          GLES20.glUniform1f(uEmissive, 0.12f)
+          GLES20.glUniform1f(uMetallic, 0.15f)
+          GLES20.glUniform1f(uRoughness, 0.30f)
+          GLES20.glUniform3fv(uBaseColor, 1, whiteColor, 0)
+          drawChildBox(itemBase, 0f, 0f, 0f, 0.48f, 0.34f, 0.24f, uModel)
+          boxMesh.draw()
+
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+          GLES20.glUniform1f(uEmissive, 0.75f)
+          GLES20.glUniform3fv(uBaseColor, 1, redColor, 0)
+          drawChildBox(itemBase, 0f, 0f, 0.13f, 0.24f, 0.08f, 0.04f, uModel)
+          boxMesh.draw()
+          drawChildBox(itemBase, 0f, 0f, 0.13f, 0.08f, 0.24f, 0.04f, uModel)
+          boxMesh.draw()
+        }
+        LootCategory.WEAPON -> {
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
+          GLES20.glUniform1f(uEmissive, 0.12f)
+          GLES20.glUniform1f(uMetallic, 0.80f)
+          GLES20.glUniform1f(uRoughness, 0.24f)
+          GLES20.glUniform3fv(uBaseColor, 1, gunDark, 0)
+          drawChildBox(itemBase, 0f, 0.04f, 0f, 0.12f, 0.14f, 0.56f, uModel)
+          boxMesh.draw()
+          GLES20.glUniform3fv(uBaseColor, 1, gunSteel, 0)
+          drawChildBox(itemBase, 0f, 0.06f, 0.36f, 0.055f, 0.055f, 0.30f, uModel)
+          boxMesh.draw()
+          drawChildBox(itemBase, 0f, -0.09f, 0.04f, 0.07f, 0.20f, 0.10f, uModel)
+          boxMesh.draw()
+        }
+        LootCategory.VEST -> {
+          val isLv4 = item.kind.armorLevel >= 4
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
+          GLES20.glUniform1f(uEmissive, 0.10f)
+          GLES20.glUniform1f(uMetallic, 0.65f)
+          GLES20.glUniform1f(uRoughness, 0.28f)
+          GLES20.glUniform3fv(uBaseColor, 1, if (isLv4) titanObsidian else kevlarSlate, 0)
+          drawChildBox(itemBase, 0f, 0f, 0f, 0.48f, 0.52f, 0.26f, uModel)
+          boxMesh.draw()
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+          GLES20.glUniform1f(uEmissive, 0.65f)
+          GLES20.glUniform3fv(uBaseColor, 1, if (isLv4) goldColor else cyanColor, 0)
+          drawChildBox(itemBase, 0f, 0.06f, 0.14f, 0.34f, 0.18f, 0.04f, uModel)
+          boxMesh.draw()
+        }
+        LootCategory.HELMET -> {
+          val isLv4 = item.kind.armorLevel >= 4
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
+          GLES20.glUniform1f(uEmissive, 0.10f)
+          GLES20.glUniform1f(uMetallic, 0.70f)
+          GLES20.glUniform1f(uRoughness, 0.24f)
+          GLES20.glUniform3fv(uBaseColor, 1, if (isLv4) titanObsidian else kevlarSlate, 0)
+          drawChildBox(itemBase, 0f, 0.04f, 0f, 0.44f, 0.38f, 0.46f, uModel)
+          sphereMesh.draw()
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+          GLES20.glUniform1f(uEmissive, 0.72f)
+          GLES20.glUniform3fv(uBaseColor, 1, if (isLv4) goldColor else cyanColor, 0)
+          drawChildBox(itemBase, 0f, 0.02f, 0.19f, 0.34f, 0.11f, 0.10f, uModel)
+          boxMesh.draw()
+        }
+        LootCategory.GLOO_WALL -> {
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.CAR_PAINT.id)
+          GLES20.glUniform1f(uEmissive, 0.24f)
+          GLES20.glUniform1f(uMetallic, 0.55f)
+          GLES20.glUniform1f(uRoughness, 0.20f)
+          GLES20.glUniform3fv(uBaseColor, 1, cyanColor, 0)
+          drawChildBox(itemBase, 0f, 0f, 0f, 0.44f, 0.52f, 0.22f, uModel)
+          boxMesh.draw()
+
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+          GLES20.glUniform1f(uEmissive, 0.82f)
+          GLES20.glUniform3fv(uBaseColor, 1, whiteColor, 0)
+          drawChildBox(itemBase, 0f, 0.04f, 0.12f, 0.30f, 0.28f, 0.05f, uModel)
+          boxMesh.draw()
+        }
+      }
+      GLES20.glUniform1f(uEmissive, 0f)
+    }
   }
 
   private fun setVec3(dst: FloatArray, x: Float, y: Float, z: Float) {

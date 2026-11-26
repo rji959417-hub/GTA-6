@@ -198,31 +198,39 @@ object TownAndValleyBuilder {
         )
       aabbs += AabbCollider(94.1f, z0, 94.9f, z1, minY = 0f, maxY = 2.0f, tag = "Enclave Wall")
     }
-    // North & East compound boundary walls
-    staticBoxes +=
-      PropBoxSpec(
-        cx = 150f,
-        cy = 0.90f,
-        cz = -58.5f,
-        sx = 110f,
-        sy = 1.80f,
-        sz = 0.55f,
-        color = creamStone,
-        surface = MaterialSurface.STUCCO,
-      )
-    aabbs += AabbCollider(95f, -58.9f, 205f, -58.1f, minY = 0f, maxY = 2.0f, tag = "Enclave North Wall")
-    staticBoxes +=
-      PropBoxSpec(
-        cx = 204.5f,
-        cy = 0.90f,
-        cz = -6f,
-        sx = 0.55f,
-        sy = 1.80f,
-        sz = 105f,
-        color = creamStone,
-        surface = MaterialSurface.STUCCO,
-      )
-    aabbs += AabbCollider(204.1f, -58.5f, 204.9f, 46.5f, minY = 0f, maxY = 2.0f, tag = "Enclave East Wall")
+    // North & East compound boundary walls (with open road gates to North Highlands & East Market)
+    for ((x0, x1) in listOf(95f to 139f, 157f to 205f)) {
+      val cx = (x0 + x1) * 0.5f
+      val len = x1 - x0
+      staticBoxes +=
+        PropBoxSpec(
+          cx = cx,
+          cy = 0.90f,
+          cz = -58.5f,
+          sx = len,
+          sy = 1.80f,
+          sz = 0.55f,
+          color = creamStone,
+          surface = MaterialSurface.STUCCO,
+        )
+      aabbs += AabbCollider(x0, -58.9f, x1, -58.1f, minY = 0f, maxY = 2.0f, tag = "Enclave North Wall")
+    }
+    for ((z0, z1) in listOf(-58.5f to -29.8f, -18.2f to 10.2f, 21.8f to 46.5f)) {
+      val cz = (z0 + z1) * 0.5f
+      val len = z1 - z0
+      staticBoxes +=
+        PropBoxSpec(
+          cx = 204.5f,
+          cy = 0.90f,
+          cz = cz,
+          sx = 0.55f,
+          sy = 1.80f,
+          sz = len,
+          color = creamStone,
+          surface = MaterialSurface.STUCCO,
+        )
+      aabbs += AabbCollider(204.1f, z0, 204.9f, z1, minY = 0f, maxY = 2.0f, tag = "Enclave East Wall")
+    }
 
     // ---------------------------------------------------------
     // 3. CENTRAL GREEN VALLEY PARK & OCTAGONAL GAZEBO (148, -4)
@@ -443,33 +451,7 @@ object TownAndValleyBuilder {
     val earthGrass = floatArrayOf(0.32f, 0.48f, 0.23f)
     val sandyShoulder = floatArrayOf(0.78f, 0.68f, 0.48f)
 
-    // West Island Terrain (x = -212..-84, z = -64..56)
-    staticBoxes +=
-      PropBoxSpec(
-        cx = -148f,
-        cy = -0.30f,
-        cz = -4f,
-        sx = 128f,
-        sy = 0.60f,
-        sz = 120f,
-        color = earthGrass,
-        surface = MaterialSurface.GRASS,
-        roughness = 0.88f,
-        castShadow = false,
-      )
-    staticBoxes +=
-      PropBoxSpec(
-        cx = -148f,
-        cy = -0.34f,
-        cz = 59.5f,
-        sx = 130f,
-        sy = 0.56f,
-        sz = 13f,
-        color = sandyShoulder,
-        surface = MaterialSurface.SAND,
-        roughness = 0.92f,
-        castShadow = false,
-      )
+    // West Island Terrain surface rendered seamlessly by TerrainHeightfield chunks
     staticBoxes +=
       PropBoxSpec(
         cx = -148f,

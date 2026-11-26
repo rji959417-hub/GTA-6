@@ -3,6 +3,7 @@ package com.example.game.audio
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import com.example.game.state.AmbientAudioSnapshot
 import kotlin.concurrent.thread
 import kotlin.math.PI
 import kotlin.math.exp
@@ -33,6 +34,7 @@ class SoundEngine {
   @Volatile private var speedRatio: Float = 0f
   @Volatile private var isDrifting: Boolean = false
   @Volatile private var isPlaying: Boolean = false
+  @Volatile private var ambientSnapshot: AmbientAudioSnapshot = AmbientAudioSnapshot()
 
   private val sfxLock = Any()
   private var punchTime = -1.0
@@ -132,6 +134,14 @@ class SoundEngine {
           val pcm = ShortArray(bufferSamples)
           var phase1 = 0.0
           var phase2 = 0.0
+          var phaseTraffic = 0.0
+          var phaseTrain = 0.0
+          var phaseChopper = 0.0
+          var phaseBird = 0.0
+          var phaseMarket = 0.0
+          var ambientClock = 0.0
+          var surfFilter = 0.0
+          var murmurFilter = 0.0
           var noiseSeed = 1234567
           val twoPi = 2.0 * PI
 
@@ -169,9 +179,11 @@ class SoundEngine {
               localLandHeavy = landHeavy
             }
 
+            val amb = ambientSnapshot
             for (i in 0 until bufferSamples) {
               noiseSeed = noiseSeed * 1664525 + 1013904223
               val white = ((noiseSeed ushr 16) and 0xFFFF) / 32768.0 - 1.0
+              ambientClock += dt
 
               var sample = 0.0
               if (driving) {
@@ -184,7 +196,63 @@ class SoundEngine {
                 val tireScreech = if (drifting) white * 0.12 else 0.0
                 sample = rumble + tireScreech
               } else {
-                sample = white * 0.014
+                sample = white * 0.010
+              }
+
+              // Procedural Ambient Soundscape (traffic, train, helicopter, birds, market people, surf/waterfall, rain/thunder)
+              surfFilter = surfFilter * 0.92 + white * 0.08
+              murmurFilter = murmurFilter * 0.88 + white * 0.12
+
+              if (amb.waterSurfLevel > 0.02f) {
+                val swell = 0.65 + 0.35 * sin(ambientClock * 1.45)
+                sample += surfFilter * 0.16 * amb.waterSurfLevel * swell
+              }
+              if (amb.rainLevel > 0.02f) {
+                sample += white * 0.095 * amb.rainLevel
+              }
+              if (amb.thunderPulse > 0.02f) {
+                val thunderTone = sin(ambientClock * twoPi * 44.0) * 0.45 + surfFilter * 0.85
+                sample += thunderTone * 0.24 * amb.thunderPulse
+              }
+              if (amb.trafficLevel > 0.02f) {
+                phaseTraffic += twoPi * 68.0 * dt
+                if (phaseTraffic > twoPi) phaseTraffic -= twoPi
+                val trafficPurr = sin(phaseTraffic) * 0.55 + sin(phaseTraffic * 2.02) * 0.25
+                sample += trafficPurr * 0.075 * amb.trafficLevel
+              }
+              if (amb.trainLevel > 0.02f) {
+                phaseTrain += twoPi * 54.0 * dt
+                if (phaseTrain > twoPi) phaseTrain -= twoPi
+                val chug = 0.45 + 0.55 * sin(ambientClock * twoPi * 3.6)
+                sample += (sin(phaseTrain) * 0.5 + surfFilter * 0.5) * 0.11 * amb.trainLevel * chug
+              }
+              if (amb.helicopterLevel > 0.02f) {
+                phaseChopper += twoPi * 14.5 * dt
+                if (phaseChopper > twoPi) phaseChopper -= twoPi
+                val bladeThump = maxOf(0.0, sin(phaseChopper))
+                sample += (bladeThump * 0.65 + surfFilter * 0.45) * 0.12 * amb.helicopterLevel
+              }
+              if (amb.birdLevel > 0.02f) {
+                val chirpCycle = ambientClock % 2.4
+                if (chirpCycle < 0.24) {
+                  val f = 1550.0 + sin(chirpCycle * 46.0) * 480.0
+                  phaseBird += twoPi * f * dt
+                  if (phaseBird > twoPi) phaseBird -= twoPi
+                  val env = sin((chirpCycle / 0.24) * PI)
+                  sample += sin(phaseBird) * 0.055 * amb.birdLevel * env
+                }
+              }
+              if (amb.marketPeopleLevel > 0.02f) {
+                phaseMarket += twoPi * 210.0 * dt
+                if (phaseMarket > twoPi) phaseMarket -= twoPi
+                val chatterMod = 0.5 + 0.5 * sin(ambientClock * 5.3) * sin(ambientClock * 2.1)
+                val crowdMurmur = murmurFilter * 0.8 + sin(phaseMarket) * 0.12 * chatterMod
+                sample += crowdMurmur * 0.12 * amb.marketPeopleLevel
+                val bellCycle = ambientClock % 4.6
+                if (bellCycle < 0.18) {
+                  val bellEnv = exp(-bellCycle * 18.0)
+                  sample += sin(ambientClock * twoPi * 1046.0) * 0.04 * amb.marketPeopleLevel * bellEnv
+                }
               }
 
               // Procedural combat & gun bursts
@@ -270,6 +338,10 @@ class SoundEngine {
     isDriving = driving
     speedRatio = (speedKmh / 120f).coerceIn(0f, 1f)
     isDrifting = drifting
+  }
+
+  fun updateAmbient(snapshot: AmbientAudioSnapshot) {
+    ambientSnapshot = snapshot
   }
 
   fun stop() {

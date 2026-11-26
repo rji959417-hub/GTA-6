@@ -3,6 +3,7 @@ package com.example.game.gl
 import android.opengl.GLES20
 import android.opengl.Matrix
 import com.example.game.state.CombatMoveType
+import com.example.game.state.GunSkin
 import com.example.game.state.HitZone
 import com.example.game.state.LandingReactionType
 import com.example.game.state.ParkourActionType
@@ -73,6 +74,9 @@ internal class CartoonCharacterRenderer(
     airborneFallNorm: Float = 0f,
     landingReaction: LandingReactionType? = null,
     landingProgress: Float = 0f,
+    vestLevel: Int = 0,
+    helmetLevel: Int = 0,
+    gunSkin: GunSkin = GunSkin.STANDARD_STEEL,
   ) {
     val yawDeg = Math.toDegrees(yawRad.toDouble()).toFloat()
     val isClimbing = parkourType == ParkourActionType.CLIMB_LEDGE
@@ -353,9 +357,11 @@ internal class CartoonCharacterRenderer(
       isTall = isTall,
       hipY = hipY,
       shoulderY = shoulderY,
+      vestLevel = vestLevel,
       uModel = uModel,
       uBaseColor = uBaseColor,
       uMaterialType = uMaterialType,
+      uEmissive = uEmissive,
       uMetallic = uMetallic,
       uRoughness = uRoughness,
     )
@@ -533,6 +539,7 @@ internal class CartoonCharacterRenderer(
         muzzleFlash = if (armSign > 0f && holdingGun) muzzleFlash else 0f,
         uEmissive = uEmissive,
         uMetallic = uMetallic,
+        gunSkin = gunSkin,
       )
     }
 
@@ -572,6 +579,7 @@ internal class CartoonCharacterRenderer(
       uEmissive = uEmissive,
       uMetallic = uMetallic,
       uRoughness = uRoughness,
+      helmetLevel = helmetLevel,
     )
   }
 
@@ -760,6 +768,7 @@ internal class CartoonCharacterRenderer(
     muzzleFlash: Float,
     uEmissive: Int,
     uMetallic: Int,
+    gunSkin: GunSkin = GunSkin.STANDARD_STEEL,
   ) {
     val upperLen = armLen * 0.56f
     val foreLen = armLen * 0.52f
@@ -814,6 +823,7 @@ internal class CartoonCharacterRenderer(
         wrist = wristMat,
         weapon = heldWeapon,
         muzzleFlash = muzzleFlash,
+        gunSkin = gunSkin,
         uModel = uModel,
         uBaseColor = uBaseColor,
         uMaterialType = uMaterialType,
@@ -828,6 +838,7 @@ internal class CartoonCharacterRenderer(
     wrist: FloatArray,
     weapon: WeaponType,
     muzzleFlash: Float,
+    gunSkin: GunSkin,
     uModel: Int,
     uBaseColor: Int,
     uMaterialType: Int,
@@ -843,67 +854,65 @@ internal class CartoonCharacterRenderer(
     Matrix.multiplyMM(gunMat, 0, wrist, 0, tmpMat, 0)
 
     GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
-    GLES20.glUniform1f(uEmissive, 0f)
-    GLES20.glUniform1f(uMetallic, 0.72f)
-    GLES20.glUniform1f(uRoughness, 0.25f)
+    GLES20.glUniform1f(uEmissive, gunSkin.emissive)
+    GLES20.glUniform1f(uMetallic, gunSkin.metallic)
+    GLES20.glUniform1f(uRoughness, gunSkin.roughness)
 
     val barrelTipZ: Float
     when (weapon) {
       WeaponType.PISTOL_9MM -> {
-        GLES20.glUniform3fv(uBaseColor, 1, gunMetalDark, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.primaryColor, 0)
         drawPart(gunMat, 0f, 0.06f, 0.14f, 0.06f, 0.07f, 0.28f, uModel, meshes.boxMesh)
-        GLES20.glUniform3fv(uBaseColor, 1, gunWoodGrip, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.gripColor, 0)
         drawPart(gunMat, 0f, -0.02f, 0.03f, 0.055f, 0.13f, 0.075f, uModel, meshes.boxMesh)
         barrelTipZ = 0.29f
       }
       WeaponType.SMG_MICRO -> {
-        GLES20.glUniform3fv(uBaseColor, 1, gunMetalDark, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.primaryColor, 0)
         drawPart(gunMat, 0f, 0.06f, 0.18f, 0.075f, 0.09f, 0.36f, uModel, meshes.boxMesh)
-        GLES20.glUniform3fv(uBaseColor, 1, gunSteel, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.secondaryColor, 0)
         drawPart(gunMat, 0f, 0.06f, 0.40f, 0.035f, 0.035f, 0.16f, uModel, meshes.boxMesh)
         drawPart(gunMat, 0f, -0.05f, 0.21f, 0.045f, 0.18f, 0.06f, uModel, meshes.boxMesh)
         barrelTipZ = 0.49f
       }
       WeaponType.SHOTGUN -> {
-        GLES20.glUniform3fv(uBaseColor, 1, gunWoodGrip, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.gripColor, 0)
         drawPart(gunMat, 0f, 0.03f, -0.10f, 0.075f, 0.11f, 0.26f, uModel, meshes.boxMesh)
-        GLES20.glUniform3fv(uBaseColor, 1, gunSteel, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.primaryColor, 0)
         drawPart(gunMat, 0f, 0.08f, 0.24f, 0.07f, 0.075f, 0.56f, uModel, meshes.boxMesh)
-        GLES20.glUniform3fv(uBaseColor, 1, gunWoodGrip, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.secondaryColor, 0)
         drawPart(gunMat, 0f, 0.03f, 0.34f, 0.085f, 0.065f, 0.22f, uModel, meshes.boxMesh)
         barrelTipZ = 0.54f
       }
       WeaponType.SNIPER_RIFLE -> {
-        // Dark tactical stock & chassis
-        GLES20.glUniform3fv(uBaseColor, 1, gunMetalDark, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.primaryColor, 0)
         drawPart(gunMat, 0f, 0.04f, -0.15f, 0.068f, 0.11f, 0.28f, uModel, meshes.boxMesh)
         drawPart(gunMat, 0f, 0.07f, 0.18f, 0.072f, 0.095f, 0.48f, uModel, meshes.boxMesh)
-        // Precision long fluted barrel & muzzle brake
-        GLES20.glUniform3fv(uBaseColor, 1, gunSteel, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.secondaryColor, 0)
         drawPart(gunMat, 0f, 0.09f, 0.62f, 0.032f, 0.032f, 0.46f, uModel, meshes.boxMesh)
         drawPart(gunMat, 0f, 0.09f, 0.84f, 0.046f, 0.046f, 0.08f, uModel, meshes.boxMesh)
         drawPart(gunMat, 0f, -0.05f, 0.22f, 0.046f, 0.15f, 0.09f, uModel, meshes.boxMesh)
-        // Top-mounted telescopic optical scope & glint lens
         drawRotatedPart(gunMat, 0f, 0.155f, 0.20f, 90f, 0f, 0f, 0.052f, 0.28f, 0.052f, uModel, meshes.capsuleMesh)
         GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
         GLES20.glUniform1f(uEmissive, 0.45f)
         GLES20.glUniform3fv(uBaseColor, 1, scopeLensCyan, 0)
         drawPart(gunMat, 0f, 0.155f, 0.34f, 0.042f, 0.042f, 0.018f, uModel, meshes.sphereMesh)
-        GLES20.glUniform1f(uEmissive, 0f)
+        GLES20.glUniform1f(uEmissive, gunSkin.emissive)
         barrelTipZ = 0.88f
       }
       WeaponType.ASSAULT_RIFLE -> {
-        GLES20.glUniform3fv(uBaseColor, 1, gunWoodGrip, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.gripColor, 0)
         drawPart(gunMat, 0f, 0.04f, -0.12f, 0.07f, 0.11f, 0.24f, uModel, meshes.boxMesh)
-        GLES20.glUniform3fv(uBaseColor, 1, gunMetalDark, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.primaryColor, 0)
         drawPart(gunMat, 0f, 0.08f, 0.20f, 0.075f, 0.095f, 0.46f, uModel, meshes.boxMesh)
-        GLES20.glUniform3fv(uBaseColor, 1, gunSteel, 0)
+        GLES20.glUniform3fv(uBaseColor, 1, gunSkin.secondaryColor, 0)
         drawPart(gunMat, 0f, 0.09f, 0.52f, 0.035f, 0.035f, 0.26f, uModel, meshes.boxMesh)
         drawPart(gunMat, 0f, -0.06f, 0.25f, 0.045f, 0.19f, 0.08f, uModel, meshes.boxMesh)
         barrelTipZ = 0.66f
       }
       WeaponType.FISTS -> barrelTipZ = 0f
     }
+    GLES20.glUniform1f(uEmissive, 0f)
 
     if (muzzleFlash > 0.05f && barrelTipZ > 0f) {
       GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
@@ -922,9 +931,11 @@ internal class CartoonCharacterRenderer(
     isTall: Boolean,
     hipY: Float,
     shoulderY: Float,
+    vestLevel: Int,
     uModel: Int,
     uBaseColor: Int,
     uMaterialType: Int,
+    uEmissive: Int,
     uMetallic: Int,
     uRoughness: Int,
   ) {
@@ -941,6 +952,37 @@ internal class CartoonCharacterRenderer(
     } else {
       drawPart(parent, 0f, 1.07f, 0f, 0.52f, 0.66f, 0.36f, uModel, meshes.capsuleMesh)
       drawPart(parent, 0f, 1.22f, 0.01f, 0.56f, 0.36f, 0.38f, uModel, meshes.sphereMesh)
+    }
+
+    if (vestLevel >= 3) {
+      val isLv4 = vestLevel >= 4
+      val plateColor = if (isLv4) floatArrayOf(0.11f, 0.12f, 0.16f) else floatArrayOf(0.16f, 0.21f, 0.29f)
+      val trimColor = if (isLv4) floatArrayOf(1.0f, 0.78f, 0.22f) else floatArrayOf(0.18f, 0.90f, 0.98f)
+      val vestY = if (isChubby) 1.10f else shoulderY - 0.18f
+      val vx = if (isChubby) 0.86f else if (isTall) 0.50f else 0.58f
+      val vz = if (isChubby) 0.82f else if (isTall) 0.38f else 0.44f
+
+      GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
+      GLES20.glUniform1f(uMetallic, if (isLv4) 0.75f else 0.55f)
+      GLES20.glUniform1f(uRoughness, 0.26f)
+      GLES20.glUniform3fv(uBaseColor, 1, plateColor, 0)
+      drawPart(parent, 0f, vestY, 0.01f, vx, if (isChubby) 0.58f else 0.48f, vz, uModel, meshes.vestMesh)
+
+      // Chest & back ballistic plate + Level 3/4 glowing emblem
+      GLES20.glUniform3fv(uBaseColor, 1, plateColor, 0)
+      drawPart(parent, 0f, vestY + 0.02f, vz * 0.46f, vx * 0.62f, 0.34f, 0.08f, uModel, meshes.boxMesh)
+      drawPart(parent, 0f, vestY + 0.02f, -vz * 0.46f, vx * 0.62f, 0.34f, 0.08f, uModel, meshes.boxMesh)
+      if (isLv4) {
+        // Extra heavy Titan shoulder pads for Level 4 armor
+        drawPart(parent, -vx * 0.54f, shoulderY - 0.01f, 0.01f, 0.16f, 0.14f, 0.22f, uModel, meshes.sphereMesh)
+        drawPart(parent, vx * 0.54f, shoulderY - 0.01f, 0.01f, 0.16f, 0.14f, 0.22f, uModel, meshes.sphereMesh)
+      }
+      GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+      GLES20.glUniform1f(uEmissive, 0.75f)
+      GLES20.glUniform3fv(uBaseColor, 1, trimColor, 0)
+      drawPart(parent, 0f, vestY + 0.05f, vz * 0.51f, vx * 0.40f, 0.08f, 0.03f, uModel, meshes.boxMesh)
+      GLES20.glUniform1f(uEmissive, 0f)
+      return
     }
 
     val vest = appearance.vestColor ?: return

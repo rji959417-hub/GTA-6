@@ -1,0 +1,336 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Validation Helpers
+    function isValidUserAccount(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.playerCode is string && data.playerCode.size() >= 3 && data.playerCode.size() <= 24 &&
+             data.playerCode.matches('^[A-Za-z0-9_\\-]+$') &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 30 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 160)) &&
+             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 30)) &&
+             data.authProvider in ['GOOGLE', 'PHONE'] &&
+             data.heroIndex is int && data.heroIndex >= 0 && data.heroIndex <= 10 &&
+             data.equippedWeapon is string && data.equippedWeapon.size() >= 2 && data.equippedWeapon.size() <= 30 &&
+             (!('ownedWeapons' in data) || (
+               data.ownedWeapons is list &&
+               data.ownedWeapons.size() <= 10 &&
+               (data.ownedWeapons.size() == 0 || data.ownedWeapons[0] is string)
+             )) &&
+             data.playerCash is int && data.playerCash >= 0 && data.playerCash <= 100000000 &&
+             data.koCount is int && data.koCount >= 0 && data.koCount <= 10000000 &&
+             (!('peerId' in data) || (data.peerId is string && data.peerId.size() <= 64)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidInviteCodeEntry(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.playerCode is string && data.playerCode.size() >= 3 && data.playerCode.size() <= 24 &&
+             data.peerId is string && data.peerId.size() <= 64 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 30 &&
+             data.heroIndex is int && data.heroIndex >= 0 && data.heroIndex <= 10 &&
+             data.weapon is string && data.weapon.size() >= 2 && data.weapon.size() <= 30 &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidSquadRoom(data) {
+      return data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128 &&
+             data.status in ['LOBBY', 'STARTED'] &&
+             data.dropZone is string && data.dropZone.size() >= 2 && data.dropZone.size() <= 30 &&
+             data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 4 &&
+             (data.memberUids.size() == 0 || data.memberUids[0] is string) &&
+             data.invitedUids is list && data.invitedUids.size() >= 1 && data.invitedUids.size() <= 8 &&
+             (data.invitedUids.size() == 0 || data.invitedUids[0] is string) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidSquadMember(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.visibleUids is list && data.visibleUids.size() >= 1 && data.visibleUids.size() <= 8 &&
+             (data.visibleUids.size() == 0 || data.visibleUids[0] is string) &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 30 &&
+             data.playerCode is string && data.playerCode.size() >= 3 && data.playerCode.size() <= 24 &&
+             data.peerId is string && data.peerId.size() <= 64 &&
+             data.heroIndex is int && data.heroIndex >= 0 && data.heroIndex <= 10 &&
+             data.weapon is string && data.weapon.size() >= 2 && data.weapon.size() <= 30 &&
+             data.ready is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidSquadInvite(data) {
+      return data.senderUid is string && data.senderUid.size() >= 1 && data.senderUid.size() <= 128 &&
+             data.recipientUid is string && data.recipientUid.size() >= 1 && data.recipientUid.size() <= 128 &&
+             data.senderUid != data.recipientUid &&
+             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 30 &&
+             data.senderCode is string && data.senderCode.size() >= 3 && data.senderCode.size() <= 24 &&
+             data.senderPeerId is string && data.senderPeerId.size() <= 64 &&
+             data.senderHeroIndex is int && data.senderHeroIndex >= 0 && data.senderHeroIndex <= 10 &&
+             data.senderWeapon is string && data.senderWeapon.size() >= 2 && data.senderWeapon.size() <= 30 &&
+             isValidId(data.squadId) &&
+             data.status in ['PENDING', 'ACCEPTED', 'DECLINED', 'CANCELLED'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidVoiceSignal(data, squadId) {
+      return data.squadId == squadId &&
+             data.senderUid is string && data.senderUid.size() >= 1 && data.senderUid.size() <= 128 &&
+             data.recipientUid is string && data.recipientUid.size() >= 1 && data.recipientUid.size() <= 128 &&
+             data.senderUid != data.recipientUid &&
+             data.type in ['OFFER', 'ANSWER', 'ICE', 'HANGUP'] &&
+             data.payload is string && data.payload.size() >= 1 && data.payload.size() <= 16384 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // 1. /users/{userId} - Private Permanent User Account & PII
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isValidId(userId) &&
+                       isOwner(userId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'userId', 'playerCode', 'displayName', 'authProvider',
+                         'heroIndex', 'equippedWeapon', 'playerCash', 'koCount',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'playerCode', 'displayName', 'email', 'phoneNumber',
+                         'authProvider', 'heroIndex', 'equippedWeapon', 'ownedWeapons',
+                         'playerCash', 'koCount', 'peerId', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserAccount(incoming());
+
+      allow update: if isValidId(userId) &&
+                       isOwner(userId) &&
+                       isValidUserAccount(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().playerCode == existing().playerCode &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'displayName', 'email', 'phoneNumber', 'authProvider',
+                         'heroIndex', 'equippedWeapon', 'ownedWeapons',
+                         'playerCash', 'koCount', 'peerId', 'updatedAt'
+                       ]);
+
+      allow delete: if isValidId(userId) && isOwner(userId);
+    }
+
+    // 2. /invite_codes/{codeId} - Non-PII Exact Lookup by Player Code or Peer ID
+    match /invite_codes/{codeId} {
+      allow get: if isSignedIn() && isValidId(codeId);
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+                       isValidId(codeId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'userId', 'playerCode', 'peerId', 'displayName',
+                         'heroIndex', 'weapon', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'playerCode', 'peerId', 'displayName',
+                         'heroIndex', 'weapon', 'updatedAt'
+                       ]) &&
+                       isValidInviteCodeEntry(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(codeId) &&
+                       isValidInviteCodeEntry(incoming()) &&
+                       existing().userId == request.auth.uid &&
+                       incoming().userId == existing().userId &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'playerCode', 'peerId', 'displayName', 'heroIndex', 'weapon', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(codeId) && existing().userId == request.auth.uid;
+    }
+
+    // 3. /squads/{squadId} - Real-Time Shared Squad Lobby & Match State
+    match /squads/{squadId} {
+      allow get: if isSignedIn() && isValidId(squadId) &&
+                    (request.auth.uid in existing().memberUids || request.auth.uid in existing().invitedUids);
+      allow list: if isSignedIn() && (request.auth.uid in resource.data.memberUids);
+
+      allow create: if isSignedIn() &&
+                       isValidId(squadId) &&
+                       incoming().hostUid == request.auth.uid &&
+                       request.auth.uid in incoming().memberUids &&
+                       request.auth.uid in incoming().invitedUids &&
+                       incoming().status == 'LOBBY' &&
+                       incoming().keys().hasAll([
+                         'hostUid', 'status', 'dropZone', 'memberUids', 'invitedUids',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'hostUid', 'status', 'dropZone', 'memberUids', 'invitedUids',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidSquadRoom(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(squadId) &&
+                       isValidSquadRoom(incoming()) &&
+                       incoming().hostUid == existing().hostUid &&
+                       incoming().createdAt == existing().createdAt && (
+                         // Host Action: manage lobby members, invites, dropZone, and match start
+                         (existing().hostUid == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'status', 'dropZone', 'memberUids', 'invitedUids', 'updatedAt'
+                          ])) ||
+                         // Invited Member Action: join or leave memberUids only with own UID
+                         ((request.auth.uid in existing().invitedUids || request.auth.uid in existing().memberUids) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt']) &&
+                          ((request.auth.uid in incoming().memberUids && incoming().memberUids.hasAll(existing().memberUids)) ||
+                           (!(request.auth.uid in incoming().memberUids) && existing().memberUids.hasAll(incoming().memberUids))))
+                       );
+
+      allow delete: if isSignedIn() && isValidId(squadId) && existing().hostUid == request.auth.uid;
+
+      // 3a. /squads/{squadId}/members/{memberUid} - Squad Member Presence & PeerJS ID
+      match /members/{memberUid} {
+        allow get: if isSignedIn() && isValidId(squadId) && isValidId(memberUid) &&
+                      (request.auth.uid == memberUid || request.auth.uid in existing().visibleUids);
+        allow list: if isSignedIn() && (request.auth.uid in resource.data.visibleUids);
+
+        allow create: if isSignedIn() &&
+                         isValidId(squadId) &&
+                         isValidId(memberUid) &&
+                         request.auth.uid == memberUid &&
+                         incoming().userId == request.auth.uid &&
+                         request.auth.uid in incoming().visibleUids &&
+                         incoming().keys().hasAll([
+                           'userId', 'visibleUids', 'displayName', 'playerCode',
+                           'peerId', 'heroIndex', 'weapon', 'ready', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'visibleUids', 'displayName', 'playerCode',
+                           'peerId', 'heroIndex', 'weapon', 'ready', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidSquadMember(incoming()) &&
+                         exists(/databases/$(database)/documents/squads/$(squadId)) &&
+                         (request.auth.uid in get(/databases/$(database)/documents/squads/$(squadId)).data.invitedUids ||
+                          request.auth.uid in get(/databases/$(database)/documents/squads/$(squadId)).data.memberUids);
+
+        allow update: if isSignedIn() &&
+                         isValidId(squadId) &&
+                         isValidId(memberUid) &&
+                         request.auth.uid == memberUid &&
+                         isValidSquadMember(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         request.auth.uid in incoming().visibleUids &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'visibleUids', 'displayName', 'playerCode',
+                           'peerId', 'heroIndex', 'weapon', 'ready', 'updatedAt'
+                         ]);
+
+        allow delete: if isSignedIn() && isValidId(squadId) && isValidId(memberUid) &&
+                         request.auth.uid == memberUid;
+      }
+
+      // 3b. /squads/{squadId}/voice_signals/{signalId} - WebRTC Audio Signaling
+      match /voice_signals/{signalId} {
+        allow get: if isSignedIn() && isValidId(squadId) && isValidId(signalId) &&
+                      (existing().recipientUid == request.auth.uid || existing().senderUid == request.auth.uid);
+        allow list: if isSignedIn() && isValidId(squadId) &&
+                       (resource.data.recipientUid == request.auth.uid || resource.data.senderUid == request.auth.uid);
+
+        allow create: if isSignedIn() &&
+                         isValidId(squadId) &&
+                         isValidId(signalId) &&
+                         incoming().senderUid == request.auth.uid &&
+                         incoming().keys().hasAll([
+                           'squadId', 'senderUid', 'recipientUid', 'type', 'payload', 'createdAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'squadId', 'senderUid', 'recipientUid', 'type', 'payload', 'createdAt'
+                         ]) &&
+                         isValidVoiceSignal(incoming(), squadId) &&
+                         exists(/databases/$(database)/documents/squads/$(squadId)) &&
+                         (request.auth.uid in get(/databases/$(database)/documents/squads/$(squadId)).data.memberUids) &&
+                         (incoming().recipientUid in get(/databases/$(database)/documents/squads/$(squadId)).data.memberUids);
+
+        allow update: if false;
+
+        allow delete: if isSignedIn() && isValidId(squadId) && isValidId(signalId) &&
+                         (existing().recipientUid == request.auth.uid || existing().senderUid == request.auth.uid);
+      }
+    }
+
+    // 4. /squad_invites/{inviteId} - Cross-Device YES/NO Lobby Invites
+    match /squad_invites/{inviteId} {
+      allow get: if isSignedIn() && isValidId(inviteId) &&
+                    (existing().senderUid == request.auth.uid || existing().recipientUid == request.auth.uid);
+      allow list: if isSignedIn() &&
+                     (resource.data.senderUid == request.auth.uid || resource.data.recipientUid == request.auth.uid);
+
+      allow create: if isSignedIn() &&
+                       isValidId(inviteId) &&
+                       incoming().senderUid == request.auth.uid &&
+                       incoming().status == 'PENDING' &&
+                       incoming().keys().hasAll([
+                         'senderUid', 'recipientUid', 'senderName', 'senderCode',
+                         'senderPeerId', 'senderHeroIndex', 'senderWeapon',
+                         'squadId', 'status', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'senderUid', 'recipientUid', 'senderName', 'senderCode',
+                         'senderPeerId', 'senderHeroIndex', 'senderWeapon',
+                         'squadId', 'status', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidSquadInvite(incoming()) &&
+                       exists(/databases/$(database)/documents/users/$(incoming().recipientUid)) &&
+                       exists(/databases/$(database)/documents/squads/$(incoming().squadId));
+
+      allow update: if isSignedIn() &&
+                       isValidId(inviteId) &&
+                       isValidSquadInvite(incoming()) &&
+                       existing().status == 'PENDING' &&
+                       incoming().senderUid == existing().senderUid &&
+                       incoming().recipientUid == existing().recipientUid &&
+                       incoming().squadId == existing().squadId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) && (
+                         (existing().recipientUid == request.auth.uid &&
+                          (incoming().status == 'ACCEPTED' || incoming().status == 'DECLINED')) ||
+                         (existing().senderUid == request.auth.uid &&
+                          incoming().status == 'CANCELLED')
+                       );
+
+      allow delete: if isSignedIn() && isValidId(inviteId) &&
+                       (existing().senderUid == request.auth.uid || existing().recipientUid == request.auth.uid);
+    }
+  }
+}

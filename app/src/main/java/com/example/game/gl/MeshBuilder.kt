@@ -1,5 +1,6 @@
 package com.example.game.gl
 
+import com.example.game.world.TerrainHeightfield
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -431,6 +432,205 @@ object MeshBuilder {
       addQuad(tx, ty - tipThick, tipTrailZ, tx, ty - tipThick, tipLeadZ, tx, ty + tipThick, tipLeadZ, tx, ty + tipThick, tipTrailZ)
     }
 
+    return Mesh(verts.toFloatArray(), indices.toShortArray())
+  }
+
+  /**
+   * Builds a high-resolution displaced 3D heightfield terrain chunk from [TerrainHeightfield].
+   * Keep (segsX + 1) * (segsZ + 1) well below 32767 so Short indices never overflow.
+   */
+  fun createTerrainChunkMesh(
+    minX: Float,
+    maxX: Float,
+    minZ: Float,
+    maxZ: Float,
+    segsX: Int = 72,
+    segsZ: Int = 56,
+  ): Mesh {
+    val vertCount = (segsX + 1) * (segsZ + 1)
+    val verts = FloatArray(vertCount * 8)
+    val n = FloatArray(3)
+    var vi = 0
+    for (rz in 0..segsZ) {
+      val v = rz.toFloat() / segsZ
+      val z = minZ + (maxZ - minZ) * v
+      for (cx in 0..segsX) {
+        val u = cx.toFloat() / segsX
+        val x = minX + (maxX - minX) * u
+        val y = TerrainHeightfield.elevationAt(x, z)
+        TerrainHeightfield.normalAt(x, z, n)
+        verts[vi++] = x
+        verts[vi++] = y
+        verts[vi++] = z
+        verts[vi++] = n[0]
+        verts[vi++] = n[1]
+        verts[vi++] = n[2]
+        verts[vi++] = x * 0.08f
+        verts[vi++] = z * 0.08f
+      }
+    }
+
+    val indices = ShortArray(segsX * segsZ * 6)
+    val stride = segsX + 1
+    var ii = 0
+    for (rz in 0 until segsZ) {
+      for (cx in 0 until segsX) {
+        val i0 = (rz * stride + cx).toShort()
+        val i1 = (i0 + 1).toShort()
+        val i2 = ((rz + 1) * stride + cx).toShort()
+        val i3 = (i2 + 1).toShort()
+        indices[ii++] = i0; indices[ii++] = i2; indices[ii++] = i1
+        indices[ii++] = i1; indices[ii++] = i2; indices[ii++] = i3
+      }
+    }
+    return Mesh(verts, indices)
+  }
+
+  /**
+   * Double-pitched triangular gabled roof prism spanning X in [-0.5, 0.5], Y in [0, 1], Z in [-0.5, 0.5].
+   */
+  fun createGabledRoofMesh(): Mesh {
+    val verts = ArrayList<Float>()
+    val indices = ArrayList<Short>()
+
+    fun addTri(
+      x0: Float, y0: Float, z0: Float,
+      x1: Float, y1: Float, z1: Float,
+      x2: Float, y2: Float, z2: Float,
+    ) {
+      val ux = x1 - x0; val uy = y1 - y0; val uz = z1 - z0
+      val vx = x2 - x0; val vy = y2 - y0; val vz = z2 - z0
+      var nx = uy * vz - uz * vy
+      var ny = uz * vx - ux * vz
+      var nz = ux * vy - uy * vx
+      val len = sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(1e-5f)
+      nx /= len; ny /= len; nz /= len
+      val base = (verts.size / 8).toShort()
+      verts.addAll(listOf(x0, y0, z0, nx, ny, nz, 0f, 0f))
+      verts.addAll(listOf(x1, y1, z1, nx, ny, nz, 1f, 0f))
+      verts.addAll(listOf(x2, y2, z2, nx, ny, nz, 0.5f, 1f))
+      indices.add(base); indices.add((base + 1).toShort()); indices.add((base + 2).toShort())
+    }
+
+    fun addQuad(
+      x0: Float, y0: Float, z0: Float,
+      x1: Float, y1: Float, z1: Float,
+      x2: Float, y2: Float, z2: Float,
+      x3: Float, y3: Float, z3: Float,
+    ) {
+      addTri(x0, y0, z0, x1, y1, z1, x2, y2, z2)
+      addTri(x0, y0, z0, x2, y2, z2, x3, y3, z3)
+    }
+
+    // Left roof slope (-X up to ridge)
+    addQuad(-0.5f, 0f, -0.5f, -0.5f, 0f, 0.5f, 0f, 1f, 0.5f, 0f, 1f, -0.5f)
+    // Right roof slope (+X down from ridge)
+    addQuad(0f, 1f, -0.5f, 0f, 1f, 0.5f, 0.5f, 0f, 0.5f, 0.5f, 0f, -0.5f)
+    // Front (+Z) & Back (-Z) gable triangles
+    addTri(-0.5f, 0f, 0.5f, 0.5f, 0f, 0.5f, 0f, 1f, 0.5f)
+    addTri(0.5f, 0f, -0.5f, -0.5f, 0f, -0.5f, 0f, 1f, -0.5f)
+    // Bottom soffit
+    addQuad(-0.5f, 0f, -0.5f, 0.5f, 0f, -0.5f, 0.5f, 0f, 0.5f, -0.5f, 0f, 0.5f)
+
+    return Mesh(verts.toFloatArray(), indices.toShortArray())
+  }
+
+  /**
+   * Tapered conifer pine tier cone (Y in [-0.5, 0.5], base radius = 0.5).
+   */
+  fun createConeMesh(segments: Int = 12): Mesh =
+    createCylinder(segments = segments, radiusTop = 0.02f, radiusBottom = 0.5f)
+
+  /**
+   * Angular faceted craggy boulder mesh centered at origin (~radius 0.5).
+   */
+  fun createRuggedBoulderMesh(): Mesh {
+    val rings = 5
+    val sectors = 9
+    val gridPts = Array(rings + 1) { FloatArray((sectors + 1) * 3) }
+    for (r in 0..rings) {
+      val v = r.toFloat() / rings
+      val phi = v * PI.toFloat()
+      val yBase = cos(phi)
+      val sinPhi = sin(phi)
+      for (s in 0..sectors) {
+        val u = s.toFloat() / sectors
+        val theta = u * 2f * PI.toFloat()
+        val jitter =
+          if (r == 0 || r == rings) 1.0f
+          else 0.78f + 0.34f * absSin(r * 3.17f + (s % sectors) * 2.13f)
+        val x = sinPhi * cos(theta) * 0.5f * jitter
+        val y = yBase * 0.44f * (0.85f + 0.25f * absSin(s * 1.7f + r))
+        val z = sinPhi * sin(theta) * 0.5f * jitter
+        val idx = s * 3
+        gridPts[r][idx] = x
+        gridPts[r][idx + 1] = y
+        gridPts[r][idx + 2] = z
+      }
+    }
+    val verts = ArrayList<Float>()
+    val indices = ArrayList<Short>()
+    fun pushTri(r0: Int, s0: Int, r1: Int, s1: Int, r2: Int, s2: Int) {
+      val x0 = gridPts[r0][s0 * 3]; val y0 = gridPts[r0][s0 * 3 + 1]; val z0 = gridPts[r0][s0 * 3 + 2]
+      val x1 = gridPts[r1][s1 * 3]; val y1 = gridPts[r1][s1 * 3 + 1]; val z1 = gridPts[r1][s1 * 3 + 2]
+      val x2 = gridPts[r2][s2 * 3]; val y2 = gridPts[r2][s2 * 3 + 1]; val z2 = gridPts[r2][s2 * 3 + 2]
+      val ux = x1 - x0; val uy = y1 - y0; val uz = z1 - z0
+      val vx = x2 - x0; val vy = y2 - y0; val vz = z2 - z0
+      var nx = uy * vz - uz * vy
+      var ny = uz * vx - ux * vz
+      var nz = ux * vy - uy * vx
+      val len = sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(1e-5f)
+      nx /= len; ny /= len; nz /= len
+      val b = (verts.size / 8).toShort()
+      verts.addAll(listOf(x0, y0, z0, nx, ny, nz, 0f, 0f))
+      verts.addAll(listOf(x1, y1, z1, nx, ny, nz, 1f, 0f))
+      verts.addAll(listOf(x2, y2, z2, nx, ny, nz, 0.5f, 1f))
+      indices.add(b); indices.add((b + 1).toShort()); indices.add((b + 2).toShort())
+    }
+    for (r in 0 until rings) {
+      for (s in 0 until sectors) {
+        pushTri(r, s, r, s + 1, r + 1, s)
+        pushTri(r, s + 1, r + 1, s + 1, r + 1, s)
+      }
+    }
+    return Mesh(verts.toFloatArray(), indices.toShortArray())
+  }
+
+  private fun absSin(v: Float): Float {
+    val s = sin(v)
+    return if (s < 0f) -s else s
+  }
+
+  /**
+   * Hemisphere dome mesh spanning Y in [0, 1] and XZ radius 0.5 for sci-fi domes & citadels.
+   */
+  fun createDomeMesh(rings: Int = 8, sectors: Int = 18): Mesh {
+    val verts = ArrayList<Float>()
+    val indices = ArrayList<Short>()
+    for (r in 0..rings) {
+      val v = r.toFloat() / rings
+      val phi = v * (PI.toFloat() * 0.5f)
+      val y = cos(phi)
+      val sinPhi = sin(phi)
+      for (s in 0..sectors) {
+        val u = s.toFloat() / sectors
+        val theta = u * 2f * PI.toFloat()
+        val x = sinPhi * cos(theta)
+        val z = sinPhi * sin(theta)
+        verts.addAll(listOf(x * 0.5f, y, z * 0.5f, x, y, z, u, v))
+      }
+    }
+    val stride = sectors + 1
+    for (r in 0 until rings) {
+      for (s in 0 until sectors) {
+        val i0 = (r * stride + s).toShort()
+        val i1 = (i0 + 1).toShort()
+        val i2 = ((r + 1) * stride + s).toShort()
+        val i3 = (i2 + 1).toShort()
+        indices.add(i0); indices.add(i1); indices.add(i2)
+        indices.add(i1); indices.add(i3); indices.add(i2)
+      }
+    }
     return Mesh(verts.toFloatArray(), indices.toShortArray())
   }
 }

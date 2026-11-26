@@ -118,26 +118,34 @@ object CollisionSolver {
     return sqrt(dx * dx + dz * dz)
   }
 
+  private fun distToSegment(px: Float, pz: Float, x1: Float, z1: Float, x2: Float, z2: Float): Float {
+    val dx = x2 - x1
+    val dz = z2 - z1
+    val lenSq = dx * dx + dz * dz
+    if (lenSq < 1e-4f) return sqrt((px - x1) * (px - x1) + (pz - z1) * (pz - z1))
+    val t = (((px - x1) * dx + (pz - z1) * dz) / lenSq).coerceIn(0f, 1f)
+    val cx = x1 + t * dx
+    val cz = z1 + t * dz
+    return sqrt((px - cx) * (px - cx) + (pz - cz) * (pz - cz))
+  }
+
   fun isOnBridge(x: Float, z: Float): Boolean {
-    val onEastBridge = x in 61.5f..86.5f
-    val onWestBridge = x in -86.5f..-61.5f
-    if (!onEastBridge && !onWestBridge) return false
-    return abs(z - 16f) <= 5.0f || abs(z + 24f) <= 5.0f
+    val onTurbineRedBridge = abs(x + 170f) <= 5.4f && z in -38f..46f
+    val onIntellectSouthBridge = abs(x + 16f) <= 5.4f && z in -132f..-84f
+    val onIntellectSwBridge = distToSegment(x, z, -96f, -92f, -58f, -142f) <= 5.2f
+    val onIntellectEastBridge = distToSegment(x, z, 66f, -148f, 24f, -162f) <= 5.2f
+    return onTurbineRedBridge || onIntellectSouthBridge || onIntellectSwBridge || onIntellectEastBridge
   }
 
   fun isOnPierOrDock(x: Float, z: Float): Boolean {
-    val baysidePier = abs(x - 22f) <= 2.6f && z in 53.5f..84.5f
-    val baysideDock = x in 15.7f..28.3f && z in 80.2f..84.8f
-    val uptownPier = abs(x - 168f) <= 2.6f && z in 53.5f..84.5f
-    val uptownDock = x in 161.7f..174.3f && z in 80.2f..84.8f
-    return baysidePier || baysideDock || uptownPier || uptownDock
+    val marinaPier = abs(x + 198f) <= 3.0f && z in 62f..92.5f
+    val marinaDock = x in -206.5f..-189.5f && z in 87.5f..93.0f
+    return marinaPier || marinaDock
   }
 
   fun isOnLand(x: Float, z: Float): Boolean {
-    val onIsland1 = x in -64.5f..64.5f && z in -64.5f..65.2f
-    val onIsland2 = x in 83.5f..212.5f && z in -64.5f..65.2f // Green Valley Enclave (East)
-    val onIsland3 = x in -212.5f..-83.5f && z in -64.5f..65.2f // Rooftop Town Street (West)
-    return onIsland1 || onIsland2 || onIsland3 || isOnBridge(x, z)
+    if (isOnBridge(x, z)) return true
+    return com.example.game.world.TerrainHeightfield.signedCoastDistance(x, z) < 1.0f
   }
 
   fun isInDeepWater(x: Float, z: Float): Boolean {
@@ -146,69 +154,65 @@ object CollisionSolver {
   }
 
   fun clampCarToIsland(x: Float, z: Float, margin: Float = 2.0f): Pair<Float, Float> {
-    val cz = z.coerceIn(-63.5f + margin, 64.5f - margin)
-    val inSouthBridgeBand = abs(cz - 16f) <= 4.3f
-    val inNorthBridgeBand = abs(cz + 24f) <= 4.3f
+    var cx = x.coerceIn(-296f, 296f)
+    var cz = z.coerceIn(-296f, 296f)
+    if (isOnBridge(cx, cz)) return Pair(cx, cz)
+    val dCoast = com.example.game.world.TerrainHeightfield.signedCoastDistance(cx, cz)
+    if (dCoast <= -margin * 0.4f) return Pair(cx, cz)
 
-    // East Channel Bridges (x = 63.5..84.5)
-    if (x in (63.5f - margin)..(84.5f + margin)) {
-      if (inSouthBridgeBand) return Pair(x, cz.coerceIn(16f - 4.0f, 16f + 4.0f))
-      if (inNorthBridgeBand) return Pair(x, cz.coerceIn(-24f - 4.0f, -24f + 4.0f))
-      val clampedX = if (x < 74f) 63.5f - margin else 84.5f + margin
-      return Pair(clampedX, cz)
+    val eps = 0.8f
+    repeat(4) {
+      val d = com.example.game.world.TerrainHeightfield.signedCoastDistance(cx, cz)
+      if (d <= -margin * 0.3f || isOnBridge(cx, cz)) return Pair(cx, cz)
+      val gx =
+        com.example.game.world.TerrainHeightfield.signedCoastDistance(cx + eps, cz) -
+          com.example.game.world.TerrainHeightfield.signedCoastDistance(cx - eps, cz)
+      val gz =
+        com.example.game.world.TerrainHeightfield.signedCoastDistance(cx, cz + eps) -
+          com.example.game.world.TerrainHeightfield.signedCoastDistance(cx, cz - eps)
+      val gLen = sqrt(gx * gx + gz * gz).coerceAtLeast(1e-4f)
+      val step = (d + margin * 0.5f).coerceIn(0.4f, 6.0f)
+      cx -= (gx / gLen) * step
+      cz -= (gz / gLen) * step
     }
-
-    // West Channel Bridges (x = -84.5..-63.5)
-    if (x in (-84.5f - margin)..(-63.5f + margin)) {
-      if (inSouthBridgeBand) return Pair(x, cz.coerceIn(16f - 4.0f, 16f + 4.0f))
-      if (inNorthBridgeBand) return Pair(x, cz.coerceIn(-24f - 4.0f, -24f + 4.0f))
-      val clampedX = if (x > -74f) -63.5f + margin else -84.5f - margin
-      return Pair(clampedX, cz)
-    }
-
-    val cx =
-      when {
-        x < -74f -> x.coerceIn(-211.5f + margin, -84.5f - margin)
-        x > 74f -> x.coerceIn(84.5f + margin, 211.5f - margin)
-        else -> x.coerceIn(-63.5f + margin, 63.5f - margin)
-      }
     return Pair(cx, cz)
   }
 
   fun clampSwimmerToWorld(x: Float, z: Float): Pair<Float, Float> =
-    Pair(x.coerceIn(-300f, 300f), z.coerceIn(-160f, 160f))
+    Pair(x.coerceIn(-340f, 340f), z.coerceIn(-340f, 340f))
 
   fun resolveBoatWaterBounds(x: Float, z: Float): Triple<Float, Float, Boolean> {
-    var bx = x.coerceIn(-303f, 303f)
-    var bz = z.coerceIn(-163f, 163f)
+    var bx = x.coerceIn(-344f, 344f)
+    var bz = z.coerceIn(-344f, 344f)
     var hit = (bx != x || bz != z)
 
-    val shoreObstacles =
+    val pierBoxes =
       listOf(
-        // Island 1 (Key Bayside)
-        AabbCollider(-67.0f, -67.0f, 67.0f, 67.5f, tag = "Key Bayside Shore"),
-        // Island 2 (Green Valley Enclave East)
-        AabbCollider(81.0f, -67.0f, 215.0f, 67.5f, tag = "Green Valley Shore"),
-        // Island 3 (Rooftop Town Street West)
-        AabbCollider(-215.0f, -67.0f, -81.0f, 67.5f, tag = "Rooftop Town Shore"),
-        // East channel bridge spans
-        AabbCollider(63.5f, 10.6f, 84.5f, 21.4f, tag = "East South Bridge"),
-        AabbCollider(63.5f, -29.4f, 84.5f, -18.6f, tag = "East North Bridge"),
-        // West channel bridge spans
-        AabbCollider(-84.5f, 10.6f, -63.5f, 21.4f, tag = "West South Bridge"),
-        AabbCollider(-84.5f, -29.4f, -63.5f, -18.6f, tag = "West North Bridge"),
-        // Bayside Pier & T-Dock
-        AabbCollider(19.3f, 54.0f, 24.7f, 84.8f, tag = "Bayside Pier"),
-        AabbCollider(15.7f, 80.2f, 28.3f, 84.8f, tag = "Bayside Dock"),
-        // Green Valley Pier & T-Dock
-        AabbCollider(165.3f, 54.0f, 170.7f, 84.8f, tag = "Valley Pier"),
-        AabbCollider(161.7f, 80.2f, 174.3f, 84.8f, tag = "Valley Dock"),
+        AabbCollider(-201f, 62f, -195f, 92.8f, tag = "Nextera Marina Pier"),
+        AabbCollider(-206.8f, 87.2f, -189.2f, 93.2f, tag = "Nextera Marina Dock"),
       )
-
-    for (box in shoreObstacles) {
+    for (box in pierBoxes) {
       resolveCircleVsAabb(bx, bz, 1.9f, box)?.let { push ->
         bx += push.first
         bz += push.second
+        hit = true
+      }
+    }
+
+    val eps = 0.9f
+    repeat(3) {
+      val dCoast = com.example.game.world.TerrainHeightfield.signedCoastDistance(bx, bz)
+      if (dCoast < 2.2f) {
+        val gx =
+          com.example.game.world.TerrainHeightfield.signedCoastDistance(bx + eps, bz) -
+            com.example.game.world.TerrainHeightfield.signedCoastDistance(bx - eps, bz)
+        val gz =
+          com.example.game.world.TerrainHeightfield.signedCoastDistance(bx, bz + eps) -
+            com.example.game.world.TerrainHeightfield.signedCoastDistance(bx, bz - eps)
+        val gLen = sqrt(gx * gx + gz * gz).coerceAtLeast(1e-4f)
+        val push = (2.4f - dCoast).coerceIn(0.4f, 5.5f)
+        bx += (gx / gLen) * push
+        bz += (gz / gLen) * push
         hit = true
       }
     }

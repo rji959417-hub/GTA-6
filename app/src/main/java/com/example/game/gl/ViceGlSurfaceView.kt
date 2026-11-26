@@ -1,6 +1,7 @@
 package com.example.game.gl
 
 import android.content.Context
+import android.graphics.PixelFormat
 import android.opengl.GLSurfaceView
 import android.util.Log
 import android.view.ViewGroup
@@ -19,9 +20,10 @@ import javax.microedition.khronos.egl.EGLDisplay
 
 class ViceGlSurfaceView(context: Context, renderer: ViceGlRenderer) : GLSurfaceView(context) {
   init {
+    holder.setFormat(PixelFormat.OPAQUE)
     setEGLContextClientVersion(2)
     setEGLConfigChooser(ResilientEglConfigChooser())
-    preserveEGLContextOnPause = false
+    preserveEGLContextOnPause = true
     setRenderer(renderer)
     renderMode = RENDERMODE_CONTINUOUSLY
   }

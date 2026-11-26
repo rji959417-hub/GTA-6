@@ -9,6 +9,7 @@ import com.example.game.math.angleBetweenXZ
 import com.example.game.math.lerpAngleRad
 import com.example.game.math.normalizeAngleRad
 import com.example.game.world.HouseSpec
+import com.example.game.world.TerrainHeightfield
 import com.example.game.world.WorldData
 import kotlin.math.PI
 import kotlin.math.abs
@@ -25,10 +26,12 @@ class GameSimulation(val world: WorldData) {
   @Volatile var isPlaying: Boolean = false
   @Volatile var isPaused: Boolean = false
   @Volatile var isGunShopOpen: Boolean = false
+  @Volatile var isStyleShopOpen: Boolean = false
   @Volatile var timePreset: TimeOfDayPreset = TimeOfDayPreset.SUNSET
   @Volatile var cameraMode: CameraDistanceMode = CameraDistanceMode.STANDARD
 
   var onCombatSfx: ((CombatSfxEvent) -> Unit)? = null
+  var onEconomyChanged: (() -> Unit)? = null
 
   // Player kinematic & survival state
   var playerX: Float = world.playerSpawnX
@@ -61,8 +64,25 @@ class GameSimulation(val world: WorldData) {
 
   var equippedWeapon: WeaponType = WeaponType.FISTS
   val ownedWeapons = linkedSetOf(WeaponType.FISTS)
+  private val purchasedWeapons = linkedSetOf(WeaponType.FISTS)
   var nearbyGunShop: Boolean = false
   var nearbyFriendCandidate: PedestrianRuntimeState? = null
+
+  // Free Fire Loot, Backpack (Max 8 slots) & Level 3 / Level 4 Armor state
+  @Volatile var isBagOpen: Boolean = false
+  val worldLootItems = mutableListOf<WorldLootItem>()
+  val bagItems = mutableListOf<BagItem>()
+  val glooWalls = mutableListOf<GlooWallState>()
+  var playerReserveGlooWalls: Int = 2
+  var playerVestLevel: Int = 0
+  var playerVestDurability: Float = 0f
+  var playerHelmetLevel: Int = 0
+  var playerHelmetDurability: Float = 0f
+  var nearbyLootLabel: String? = null
+  private var bagFullBannerCooldownSec: Float = 0f
+  private var lootUidSeq: Int = 0
+  private var glooUidSeq: Int = 0
+  private var lootRespawnTimerSec: Float = 0f
 
   var activeAttackMove: CombatMoveType? = null
   var attackTimerSec: Float = 0f
@@ -75,6 +95,34 @@ class GameSimulation(val world: WorldData) {
   private var weaponAimTimerSec: Float = 0f
   private var muzzleFlashTimerSec: Float = 0f
   var npcDefeatedCount: Int = 0
+
+  // Elimination, Killer Spectate & Match Coin Rewards
+  @Volatile var isPlayerEliminated: Boolean = false
+  @Volatile var isSpectatingKiller: Boolean = false
+  var playerFallProgress: Float = 0f
+  private var spectatedKillerPedId: String? = null
+  private var eliminatedByName: String? = null
+  private var eliminatedByWeapon: WeaponType = WeaponType.FISTS
+  private var lastAttackerPedId: String? = null
+  private var lastAttackerName: String? = null
+  private var lastAttackerWeapon: WeaponType = WeaponType.FISTS
+  private var lastAttackerTimerSec: Float = 0f
+  private var matchElapsedSec: Float = 0f
+  private var matchStartKoCount: Int = 0
+  private var lastMatchCoinsEarned: Int = 0
+  private var matchCoinsAwarded: Boolean = false
+
+  // Lobby Customization Store (Clothes, Hair Styles, Pants, Gun Paint, Car Skins)
+  var equippedCloth: ClothStyle = ClothStyle.PRESET_DEFAULT
+  val ownedCloths = linkedSetOf(ClothStyle.PRESET_DEFAULT)
+  var equippedHair: HairCustomization = HairCustomization.PRESET_DEFAULT
+  val ownedHairs = linkedSetOf(HairCustomization.PRESET_DEFAULT)
+  var equippedPants: PantsStyle = PantsStyle.PRESET_DEFAULT
+  val ownedPants = linkedSetOf(PantsStyle.PRESET_DEFAULT)
+  var equippedGunSkin: GunSkin = GunSkin.STANDARD_STEEL
+  val ownedGunSkins = linkedSetOf(GunSkin.STANDARD_STEEL)
+  var equippedCarSkin: CarSkin = CarSkin.FACTORY_DEFAULT
+  val ownedCarSkins = linkedSetOf(CarSkin.FACTORY_DEFAULT)
 
   private var lastHitBanner: String? = null
   private var hitBannerTimerSec: Float = 0f
@@ -141,6 +189,7 @@ class GameSimulation(val world: WorldData) {
         displayName = it.displayName,
         x = it.x,
         z = it.z,
+        y = TerrainHeightfield.elevationAt(it.x, it.z).coerceAtLeast(0f),
         yawRad = it.yawRad,
         bodyColor = it.bodyColor,
         trimColor = it.trimColor,
@@ -180,6 +229,18 @@ class GameSimulation(val world: WorldData) {
   val pedestrians: List<PedestrianRuntimeState> =
     world.pedestrianSpawns.map {
       val start = it.waypoints.first()
+      val vDur =
+        when (it.vestLevel) {
+          4 -> LootItemKind.VEST_LV4.maxDurability
+          3 -> LootItemKind.VEST_LV3.maxDurability
+          else -> 0f
+        }
+      val hDur =
+        when (it.helmetLevel) {
+          4 -> LootItemKind.HELMET_LV4.maxDurability
+          3 -> LootItemKind.HELMET_LV3.maxDurability
+          else -> 0f
+        }
       PedestrianRuntimeState(
         id = it.id,
         waypoints = it.waypoints,
@@ -188,13 +249,23 @@ class GameSimulation(val world: WorldData) {
         speed = it.speed,
         x = start.first,
         z = start.second,
-        y = 0f,
+        y = TerrainHeightfield.elevationAt(start.first, start.second).coerceAtLeast(0f),
         appearance = it.appearance,
         isBraveDefender = it.isBraveDefender,
         spawnX = start.first,
         spawnZ = start.second,
+        isRivalFighter = it.isRivalFighter,
+        weapon = it.rivalWeapon,
+        vestLevel = it.vestLevel,
+        vestDurability = vDur,
+        helmetLevel = it.helmetLevel,
+        helmetDurability = hDur,
       )
     }
+
+  init {
+    populateHouseLoot()
+  }
 
   val ejectedNpcs = mutableListOf<EjectedNpcState>()
   var activeCarjack: CarjackSequenceState? = null
@@ -211,6 +282,10 @@ class GameSimulation(val world: WorldData) {
   var camLookAt: Vec3 = Vec3(playerX, 1.4f, playerZ)
   var camFovDeg: Float = 62f
 
+  val livingWorld = LivingWorldController(world)
+  private val botController = BattleRoyaleBotController(this)
+  var nearbyMarketStallLabel: String? = null
+
   var worldTimeSec: Float = 0f
   private var userLookCooldown: Float = 0f
   private var hijackCounter: Int = 0
@@ -226,6 +301,7 @@ class GameSimulation(val world: WorldData) {
       stepAiRoadTraffic(dt)
       stepAiOceanBoats(dt)
       stepPedestrians(dt)
+      livingWorld.step(dt, playerX, playerZ, false, 0f, boats, camLookAt.x, camLookAt.z)
 
       val lobbyStageX = -2.2f
       val lobbyStageZ = 8.4f
@@ -243,10 +319,11 @@ class GameSimulation(val world: WorldData) {
         if (hitBannerTimerSec <= 0f) lastHitBanner = null
       }
 
-      if (!isGunShopOpen) {
+      if (!isGunShopOpen && !isStyleShopOpen) {
         val (dYaw, _) = input.consumeOrbitDelta()
         if (abs(dYaw) > 0.0005f) {
           lobbyHeroYawRad = normalizeAngleRad(lobbyHeroYawRad + dYaw * 0.009f)
+          playerYawRad = lobbyHeroYawRad
         }
       } else {
         input.consumeOrbitDelta()
@@ -262,7 +339,62 @@ class GameSimulation(val world: WorldData) {
       return
     }
 
-    if (isPaused || isGunShopOpen) return
+    if (isPaused || isGunShopOpen || isBagOpen || isStyleShopOpen) return
+
+    if (isPlayerEliminated) {
+      // Lock ALL movement, running, shooting, and vehicle controls while eliminated or spectating!
+      input.moveX = 0f
+      input.moveY = 0f
+      input.sprintHeld = false
+      input.autoSprint = false
+      input.jumpQueued = false
+      input.climbQueued = false
+      input.punchQueued = false
+      input.kickQueued = false
+      input.fireHeld = false
+      input.fireQueued = false
+      input.steerLeft = false
+      input.steerRight = false
+      input.gasHeld = false
+      input.brakeHeld = false
+      input.handbrakeHeld = false
+      playerSpeedNorm = 0f
+      isScoped = false
+      nearbyLootLabel = null
+      playerFallProgress = min(1f, playerFallProgress + dt * 4.5f)
+
+      val (dYaw, dPitch) = input.consumeOrbitDelta()
+      if (isSpectatingKiller && (abs(dYaw) > 0.0005f || abs(dPitch) > 0.0005f)) {
+        camYawRad = normalizeAngleRad(camYawRad - dYaw * 0.0065f)
+        camPitchRad = (camPitchRad + dPitch * 0.0052f).coerceIn(-0.08f, 1.08f)
+      }
+
+      if (planeActiveInSky) {
+        val planeSpeed = 36.5f
+        planeX += sin(planeYawRad) * planeSpeed * dt
+        planeZ += cos(planeYawRad) * planeSpeed * dt
+      }
+
+      stepCombatEffects(dt)
+      stepGlooWalls(dt)
+      stepBullets(dt)
+      stepAiRoadTraffic(dt)
+      stepAiOceanBoats(dt)
+      stepPedestrians(dt)
+      stepEjectedNpcs(dt)
+      livingWorld.step(dt, playerX, playerZ, false, 0f, boats, camLookAt.x, camLookAt.z)
+      ensureLiveSpectatedTarget()
+      updateCamera(dt)
+      return
+    }
+
+    matchElapsedSec += dt
+    if (lastAttackerTimerSec > 0f) {
+      lastAttackerTimerSec = max(0f, lastAttackerTimerSec - dt)
+      if (lastAttackerTimerSec <= 0f) {
+        lastAttackerPedId = null
+      }
+    }
 
     val (dYaw, dPitch) = input.consumeOrbitDelta()
     if (abs(dYaw) > 0.0005f || abs(dPitch) > 0.0005f) {
@@ -304,11 +436,14 @@ class GameSimulation(val world: WorldData) {
     }
 
     stepCombatEffects(dt)
+    stepGlooWalls(dt)
+    stepLootRespawn(dt)
     stepBullets(dt)
     stepAiRoadTraffic(dt)
     stepAiOceanBoats(dt)
     stepPedestrians(dt)
     stepEjectedNpcs(dt)
+    livingWorld.step(dt, playerX, playerZ, isSwimming, playerSpeedNorm, boats, camLookAt.x, camLookAt.z)
 
     val carjack = activeCarjack
     val boat = activeBoat
@@ -325,16 +460,19 @@ class GameSimulation(val world: WorldData) {
       else -> stepOnFoot(dt)
     }
 
+    if (dropPhase == DropPhase.GROUND && activeVehicle == null && activeBoat == null && activeCarjack == null) {
+      stepWorldLootAutoPickup(dt)
+    } else {
+      nearbyLootLabel = null
+    }
+
     if (playerHealth <= 0f) {
-      playerHealth = 100f
-      wantedLevel = 0
-      isScoped = false
-      playerCash = max(150, playerCash)
-      resetToSpawn()
+      triggerPlayerElimination()
     }
 
     updateHouseDetection()
     updateGunShopProximity()
+    updateMarketProximity()
     updateFriendCandidate()
     updateCamera(dt)
   }
@@ -345,6 +483,22 @@ class GameSimulation(val world: WorldData) {
     isPlaying = true
     isPaused = false
     isGunShopOpen = false
+    isStyleShopOpen = false
+    isBagOpen = false
+    isPlayerEliminated = false
+    isSpectatingKiller = false
+    playerFallProgress = 0f
+    spectatedKillerPedId = null
+    eliminatedByName = null
+    eliminatedByWeapon = WeaponType.FISTS
+    lastAttackerPedId = null
+    lastAttackerName = null
+    lastAttackerWeapon = WeaponType.FISTS
+    lastAttackerTimerSec = 0f
+    matchElapsedSec = 0f
+    matchStartKoCount = npcDefeatedCount
+    lastMatchCoinsEarned = 0
+    matchCoinsAwarded = false
     activeVehicle = null
     activeBoat = null
     activeCarjack = null
@@ -364,6 +518,19 @@ class GameSimulation(val world: WorldData) {
     airborneLaunchVz = 0f
     camLandingDipY = 0f
     camImpactShake = 0f
+    playerHealth = 100f
+    playerVestLevel = 0
+    playerVestDurability = 0f
+    playerHelmetLevel = 0
+    playerHelmetDurability = 0f
+    bagItems.clear()
+    glooWalls.clear()
+    playerReserveGlooWalls = 2
+    vehicles.forEach { it.driverBotId = null }
+    nearbyLootLabel = null
+    recomputeOwnedWeaponsFromPurchasedAndBag()
+    populateHouseLoot()
+    resetRivalFightersForMatch()
     dropPhase = DropPhase.AIRPLANE
     planeTimerSec = 10.0f
     planeX = lobbyDropZone.spawnPlaneX
@@ -384,7 +551,7 @@ class GameSimulation(val world: WorldData) {
     airStartY = playerY
     camYawRad = normalizeAngleRad(planeYawRad + PI.toFloat())
     camPitchRad = 0.44f
-    showBanner("AIRPLANE DROP · TAP JUMP ANYTIME (10s)")
+    showBanner("AIRPLANE DROP · TAP JUMP & LOOT HOUSES!")
   }
 
   @Synchronized
@@ -626,91 +793,206 @@ class GameSimulation(val world: WorldData) {
         }
       }
 
-      // 3. Check living Pedestrians & upright Ejected NPCs along segment
-      var bestHitDist = earliestWallT
-      var bestPed: PedestrianRuntimeState? = null
-      var bestEjected: EjectedNpcState? = null
-      var bestHitY = b.y
-
-      for (ped in pedestrians) {
-        if (ped.reactionState == NpcReactionState.KNOCKED_DOWN || ped.isFriend) continue
-        val tHit = intersectSegmentCircleXZ(b.prevX, b.prevZ, b.x, b.z, ped.x, ped.z, 0.56f)
-        if (tHit != null) {
-          val distAlong = tHit * segLenXZ
-          val hitY = b.prevY + (b.y - b.prevY) * tHit
-          if (distAlong < bestHitDist && hitY in ped.y..(ped.y + 2.05f)) {
-            bestHitDist = distAlong
-            bestPed = ped
-            bestEjected = null
-            bestHitY = hitY
+      // 2B. Check Gloo Wall Shield interception along bullet segment
+      var earliestGlooT = earliestWallT
+      var hitGlooWall: GlooWallState? = null
+      val glooIter = glooWalls.iterator()
+      while (glooIter.hasNext()) {
+        val wall = glooIter.next()
+        if (wall.hp <= 0f) continue
+        if (b.y !in wall.y..(wall.y + 2.35f)) continue
+        val tFrac = intersectSegmentGlooWall(b.prevX, b.prevZ, b.x, b.z, wall)
+        if (tFrac != null) {
+          val distAlong = tFrac * segLenXZ
+          if (distAlong < earliestGlooT) {
+            earliestGlooT = distAlong
+            hitGlooWall = wall
           }
         }
       }
-
-      for (npc in ejectedNpcs) {
-        if (npc.isDead || npc.inWater || npc.fallProgress > 0.6f) continue
-        val tHit = intersectSegmentCircleXZ(b.prevX, b.prevZ, b.x, b.z, npc.x, npc.z, 0.56f)
-        if (tHit != null) {
-          val distAlong = tHit * segLenXZ
-          val hitY = b.prevY + (b.y - b.prevY) * tHit
-          if (distAlong < bestHitDist && hitY in npc.y..(npc.y + 2.0f)) {
-            bestHitDist = distAlong
-            bestEjected = npc
-            bestPed = null
-            bestHitY = hitY
-          }
+      if (hitGlooWall != null && earliestGlooT <= earliestWallT) {
+        val frac = (earliestGlooT / segLenXZ).coerceIn(0f, 1f)
+        val hx = b.prevX + segDx * frac
+        val hy = b.prevY + (b.y - b.prevY) * frac
+        val hz = b.prevZ + segDz * frac
+        hitGlooWall.hp = max(0f, hitGlooWall.hp - b.damage)
+        hitSparks += HitSparkState(hx, hy, hz, floatArrayOf(0.24f, 0.90f, 1.0f), durationSec = 0.22f)
+        if (hitGlooWall.hp <= 0f) {
+          glooWalls.remove(hitGlooWall)
+          hitSparks += HitSparkState(hitGlooWall.x, hitGlooWall.y + 1.0f, hitGlooWall.z, floatArrayOf(0.55f, 0.96f, 1.0f), durationSec = 0.36f)
         }
+        iter.remove()
+        continue
       }
 
-      when {
-        bestPed != null -> {
-          val localHitY = bestHitY - bestPed.y
+      // 3. Branch enemy vs player projectile collisions
+      if (b.fromEnemy) {
+        var bestHitDist = earliestWallT
+        var playerHitY = b.y
+        var hitPlayer = false
+        var bestBot: PedestrianRuntimeState? = null
+        var bestBotHitY = b.y
+
+        if (isPlaying && dropPhase == DropPhase.GROUND && activeVehicle == null && activeBoat == null && !isSwimming) {
+          val tHit = intersectSegmentCircleXZ(b.prevX, b.prevZ, b.x, b.z, playerX, playerZ, 0.52f)
+          if (tHit != null) {
+            val distAlong = tHit * segLenXZ
+            val hitY = b.prevY + (b.y - b.prevY) * tHit
+            if (distAlong < bestHitDist && hitY in playerY..(playerY + 1.90f)) {
+              bestHitDist = distAlong
+              playerHitY = hitY
+              hitPlayer = true
+            }
+          }
+        }
+
+        for (ped in pedestrians) {
+          if (ped.reactionState == NpcReactionState.KNOCKED_DOWN || ped.id == b.attackerId || ped.isFriend) continue
+          val tHit = intersectSegmentCircleXZ(b.prevX, b.prevZ, b.x, b.z, ped.x, ped.z, 0.54f)
+          if (tHit != null) {
+            val distAlong = tHit * segLenXZ
+            val hitY = b.prevY + (b.y - b.prevY) * tHit
+            if (distAlong < bestHitDist && hitY in ped.y..(ped.y + 2.0f)) {
+              bestHitDist = distAlong
+              bestBot = ped
+              bestBotHitY = hitY
+              hitPlayer = false
+            }
+          }
+        }
+
+        if (hitPlayer && !isPlayerEliminated) {
+          val zone = if (playerHitY - playerY >= 1.28f) HitZone.HEAD else HitZone.TORSO
+          applyIncomingDamageToPlayer(
+            rawDamage = b.damage,
+            hitZone = zone,
+            attackerId = b.attackerId,
+            attackerName = b.attackerName,
+            attackerWeapon = b.attackerWeapon,
+          )
+          hitSparks += HitSparkState(playerX, playerHitY, playerZ, floatArrayOf(1.0f, 0.25f, 0.20f))
+          onCombatSfx?.invoke(CombatSfxEvent.HIT)
+          iter.remove()
+          continue
+        }
+        if (bestBot != null) {
+          val localHitY = bestBotHitY - bestBot.y
           val zone =
             when {
               localHitY >= 1.28f -> HitZone.HEAD
               localHitY >= 0.58f -> HitZone.TORSO
               else -> HitZone.LEGS
             }
-          val zoneDamage =
-            when (zone) {
-              HitZone.HEAD -> b.damage * 2.35f
-              HitZone.TORSO -> b.damage
-              HitZone.LEGS -> b.damage * 0.72f
-              HitZone.NONE -> b.damage
-            }
+          val attackerPed = b.attackerId?.let { id -> pedestrians.firstOrNull { it.id == id } }
           applyDamageToPedestrian(
-            ped = bestPed,
-            damage = zoneDamage,
-            knockbackSpeed = b.knockback * (if (zone == HitZone.HEAD) 1.35f else 1f),
+            ped = bestBot,
+            damage = b.damage * (if (zone == HitZone.HEAD) 1.65f else 1.0f),
+            knockbackSpeed = b.knockback,
             dirX = rdx,
             dirZ = rdz,
             hitZone = zone,
             fromGunfire = true,
-            fromPlayer = true,
+            fromPlayer = false,
+            attackerBot = attackerPed,
           )
-          onCombatSfx?.invoke(if (zone == HitZone.HEAD) CombatSfxEvent.HEADSHOT else CombatSfxEvent.HIT)
+          onCombatSfx?.invoke(CombatSfxEvent.HIT)
           iter.remove()
           continue
         }
-        bestEjected != null -> {
-          val zone =
-            when {
-              bestHitY - bestEjected.y >= 1.28f -> HitZone.HEAD
-              bestHitY - bestEjected.y >= 0.58f -> HitZone.TORSO
-              else -> HitZone.LEGS
-            }
-          val zoneDamage = if (zone == HitZone.HEAD) b.damage * 2.2f else b.damage
-          applyDamageToEjectedNpc(bestEjected, zoneDamage, b.knockback, rdx, rdz, zone)
-          onCombatSfx?.invoke(if (zone == HitZone.HEAD) CombatSfxEvent.HEADSHOT else CombatSfxEvent.HIT)
-          iter.remove()
-          continue
-        }
-        hitWall -> {
+        if (hitWall) {
           val wx = b.prevX + rdx * earliestWallT
           val wz = b.prevZ + rdz * earliestWallT
           hitSparks += HitSparkState(wx, b.y, wz, floatArrayOf(1.0f, 0.78f, 0.28f))
           iter.remove()
           continue
+        }
+      } else {
+        // 3B. Check living Pedestrians & upright Ejected NPCs along segment
+        var bestHitDist = earliestWallT
+        var bestPed: PedestrianRuntimeState? = null
+        var bestEjected: EjectedNpcState? = null
+        var bestHitY = b.y
+
+        for (ped in pedestrians) {
+          if (ped.reactionState == NpcReactionState.KNOCKED_DOWN || ped.isFriend) continue
+          val tHit = intersectSegmentCircleXZ(b.prevX, b.prevZ, b.x, b.z, ped.x, ped.z, 0.56f)
+          if (tHit != null) {
+            val distAlong = tHit * segLenXZ
+            val hitY = b.prevY + (b.y - b.prevY) * tHit
+            if (distAlong < bestHitDist && hitY in ped.y..(ped.y + 2.05f)) {
+              bestHitDist = distAlong
+              bestPed = ped
+              bestEjected = null
+              bestHitY = hitY
+            }
+          }
+        }
+
+        for (npc in ejectedNpcs) {
+          if (npc.isDead || npc.inWater || npc.fallProgress > 0.6f) continue
+          val tHit = intersectSegmentCircleXZ(b.prevX, b.prevZ, b.x, b.z, npc.x, npc.z, 0.56f)
+          if (tHit != null) {
+            val distAlong = tHit * segLenXZ
+            val hitY = b.prevY + (b.y - b.prevY) * tHit
+            if (distAlong < bestHitDist && hitY in npc.y..(npc.y + 2.0f)) {
+              bestHitDist = distAlong
+              bestEjected = npc
+              bestPed = null
+              bestHitY = hitY
+            }
+          }
+        }
+
+        when {
+          bestPed != null -> {
+            val localHitY = bestHitY - bestPed.y
+            val zone =
+              when {
+                localHitY >= 1.28f -> HitZone.HEAD
+                localHitY >= 0.58f -> HitZone.TORSO
+                else -> HitZone.LEGS
+              }
+            val zoneDamage =
+              when (zone) {
+                HitZone.HEAD -> b.damage * 2.35f
+                HitZone.TORSO -> b.damage
+                HitZone.LEGS -> b.damage * 0.72f
+                HitZone.NONE -> b.damage
+              }
+            applyDamageToPedestrian(
+              ped = bestPed,
+              damage = zoneDamage,
+              knockbackSpeed = b.knockback * (if (zone == HitZone.HEAD) 1.35f else 1f),
+              dirX = rdx,
+              dirZ = rdz,
+              hitZone = zone,
+              fromGunfire = true,
+              fromPlayer = true,
+            )
+            onCombatSfx?.invoke(if (zone == HitZone.HEAD) CombatSfxEvent.HEADSHOT else CombatSfxEvent.HIT)
+            iter.remove()
+            continue
+          }
+          bestEjected != null -> {
+            val zone =
+              when {
+                bestHitY - bestEjected.y >= 1.28f -> HitZone.HEAD
+                bestHitY - bestEjected.y >= 0.58f -> HitZone.TORSO
+                else -> HitZone.LEGS
+              }
+            val zoneDamage = if (zone == HitZone.HEAD) b.damage * 2.2f else b.damage
+            applyDamageToEjectedNpc(bestEjected, zoneDamage, b.knockback, rdx, rdz, zone)
+            onCombatSfx?.invoke(if (zone == HitZone.HEAD) CombatSfxEvent.HEADSHOT else CombatSfxEvent.HIT)
+            iter.remove()
+            continue
+          }
+          hitWall -> {
+            val wx = b.prevX + rdx * earliestWallT
+            val wz = b.prevZ + rdz * earliestWallT
+            hitSparks += HitSparkState(wx, b.y, wz, floatArrayOf(1.0f, 0.78f, 0.28f))
+            iter.remove()
+            continue
+          }
         }
       }
 
@@ -726,12 +1008,13 @@ class GameSimulation(val world: WorldData) {
 
   @Synchronized
   fun toggleSit(): Boolean {
-    if (!isPlaying || isPaused || isGunShopOpen) return false
+    if (!isPlaying || isPaused || isGunShopOpen || isStyleShopOpen || isPlayerEliminated) return false
     if (activeVehicle != null || activeBoat != null || activeCarjack != null || isSwimming) {
       return false
     }
     isSitting = !isSitting
     if (isSitting) {
+      input.autoSprint = false
       isScoped = false
       activeAttackMove = null
       attackTimerSec = 0f
@@ -739,6 +1022,26 @@ class GameSimulation(val world: WorldData) {
       weaponAimTimerSec = 0f
     }
     return isSitting
+  }
+
+  @Synchronized
+  fun toggleAutoSprint(): Boolean {
+    if (!isPlaying || isPaused || isGunShopOpen || isBagOpen || isStyleShopOpen || isPlayerEliminated) {
+      input.autoSprint = false
+      return false
+    }
+    if (activeVehicle != null || activeBoat != null || activeCarjack != null || activeParkour != null) {
+      input.autoSprint = false
+      return false
+    }
+    input.autoSprint = !input.autoSprint
+    if (input.autoSprint) {
+      isSitting = false
+      isScoped = false
+      activeAttackMove = null
+      attackTimerSec = 0f
+    }
+    return input.autoSprint
   }
 
   @Synchronized
@@ -750,6 +1053,7 @@ class GameSimulation(val world: WorldData) {
     isSitting = false
     isScoped = !isScoped
     if (isScoped) {
+      input.autoSprint = false
       // Snap camera smoothly eye-level forward downrange so scope looks right where Motu faces
       camYawRad = normalizeAngleRad(playerYawRad + PI.toFloat())
       camPitchRad = 0.02f
@@ -813,7 +1117,10 @@ class GameSimulation(val world: WorldData) {
 
   @Synchronized
   fun openGunShop() {
+    if (isPlayerEliminated) return
     isPaused = false
+    isBagOpen = false
+    isStyleShopOpen = false
     isGunShopOpen = true
     isSitting = false
     isScoped = false
@@ -825,10 +1132,187 @@ class GameSimulation(val world: WorldData) {
   }
 
   @Synchronized
+  fun openBag() {
+    if (!isPlaying || isPlayerEliminated) return
+    isPaused = false
+    isGunShopOpen = false
+    isStyleShopOpen = false
+    isBagOpen = true
+    isScoped = false
+  }
+
+  @Synchronized
+  fun closeBag() {
+    isBagOpen = false
+  }
+
+  @Synchronized
+  fun toggleBag(): Boolean {
+    if (isPlayerEliminated) return false
+    if (isBagOpen) closeBag() else openBag()
+    return isBagOpen
+  }
+
+  @Synchronized
+  fun useQuickMedkit(): Boolean {
+    if (!isPlaying || isPlayerEliminated) return false
+    val med = bagItems.firstOrNull { it.kind == LootItemKind.MEDKIT }
+    if (med == null) {
+      showBanner("NO MEDKITS IN BAG")
+      return false
+    }
+    if (playerHealth >= 99.5f) {
+      showBanner("HEALTH ALREADY FULL")
+      return false
+    }
+    bagItems.remove(med)
+    playerHealth = min(100f, playerHealth + med.kind.healAmount)
+    onCombatSfx?.invoke(CombatSfxEvent.FRIEND)
+    showBanner("MEDKIT USED · HP ${playerHealth.toInt()}")
+    return true
+  }
+
+  @Synchronized
+  fun deployPlayerGlooWall(): Boolean {
+    if (!canActOnFootCombat()) return false
+    val bagGlooIdx = bagItems.indexOfFirst { it.kind == LootItemKind.GLOO_WALL }
+    when {
+      playerReserveGlooWalls > 0 -> playerReserveGlooWalls--
+      bagGlooIdx >= 0 -> bagItems.removeAt(bagGlooIdx)
+      else -> {
+        showBanner("NO GLOO WALLS LEFT")
+        return false
+      }
+    }
+    val wallX = playerX + sin(playerYawRad) * 2.15f
+    val wallZ = playerZ + cos(playerYawRad) * 2.15f
+    val wallY = computeGroundHeight(wallX, wallZ, playerY)
+    glooWalls +=
+      GlooWallState(
+        id = "gloo_${++glooUidSeq}",
+        ownerId = "player",
+        x = wallX,
+        y = wallY,
+        z = wallZ,
+        yawRad = playerYawRad,
+        isPlayerOwned = true,
+      )
+    hitSparks += HitSparkState(wallX, wallY + 1.0f, wallZ, floatArrayOf(0.24f, 0.90f, 1.0f), durationSec = 0.35f)
+    onCombatSfx?.invoke(CombatSfxEvent.CLIMB)
+    showBanner("GLOO WALL DEPLOYED!")
+    return true
+  }
+
+  @Synchronized
+  fun useOrEquipBagItem(uid: String): Boolean {
+    val idx = bagItems.indexOfFirst { it.uid == uid }
+    if (idx < 0) return false
+    val item = bagItems[idx]
+    return when (item.kind.category) {
+      LootCategory.MEDICAL -> {
+        if (playerHealth >= 99.5f) {
+          showBanner("HEALTH ALREADY FULL")
+          false
+        } else {
+          bagItems.removeAt(idx)
+          playerHealth = min(100f, playerHealth + item.kind.healAmount)
+          onCombatSfx?.invoke(CombatSfxEvent.FRIEND)
+          showBanner("MEDKIT USED · +${item.kind.healAmount.toInt()} HP")
+          true
+        }
+      }
+      LootCategory.GLOO_WALL -> {
+        if (!canActOnFootCombat()) {
+          showBanner("EXIT VEHICLE TO DEPLOY GLOO")
+          false
+        } else {
+          bagItems.removeAt(idx)
+          playerReserveGlooWalls++
+          deployPlayerGlooWall()
+        }
+      }
+      LootCategory.WEAPON -> {
+        val weapon = item.kind.weapon ?: return false
+        ownedWeapons += weapon
+        equippedWeapon = weapon
+        onCombatSfx?.invoke(CombatSfxEvent.CASH)
+        showBanner("EQUIPPED ${weapon.displayName}")
+        true
+      }
+      LootCategory.VEST -> {
+        val prevLevel = playerVestLevel
+        val prevDur = playerVestDurability
+        bagItems.removeAt(idx)
+        playerVestLevel = item.kind.armorLevel
+        playerVestDurability = item.durability.coerceAtLeast(1f)
+        if (prevLevel >= 3 && prevDur > 5f && bagItems.size < MAX_BAG_SLOTS) {
+          val prevKind = if (prevLevel == 4) LootItemKind.VEST_LV4 else LootItemKind.VEST_LV3
+          bagItems.add(BagItem("bag_${++lootUidSeq}", prevKind, prevDur))
+        }
+        onCombatSfx?.invoke(CombatSfxEvent.FRIEND)
+        showBanner("EQUIPPED ${item.kind.displayName}")
+        true
+      }
+      LootCategory.HELMET -> {
+        val prevLevel = playerHelmetLevel
+        val prevDur = playerHelmetDurability
+        bagItems.removeAt(idx)
+        playerHelmetLevel = item.kind.armorLevel
+        playerHelmetDurability = item.durability.coerceAtLeast(1f)
+        if (prevLevel >= 3 && prevDur > 5f && bagItems.size < MAX_BAG_SLOTS) {
+          val prevKind = if (prevLevel == 4) LootItemKind.HELMET_LV4 else LootItemKind.HELMET_LV3
+          bagItems.add(BagItem("bag_${++lootUidSeq}", prevKind, prevDur))
+        }
+        onCombatSfx?.invoke(CombatSfxEvent.FRIEND)
+        showBanner("EQUIPPED ${item.kind.displayName}")
+        true
+      }
+      LootCategory.CURRENCY -> false
+    }
+  }
+
+  @Synchronized
+  fun removeBagItem(uid: String, dropToWorld: Boolean = true): Boolean {
+    val idx = bagItems.indexOfFirst { it.uid == uid }
+    if (idx < 0) return false
+    val removed = bagItems.removeAt(idx)
+    recomputeOwnedWeaponsFromPurchasedAndBag()
+    if (dropToWorld) {
+      val dropX = playerX + sin(playerYawRad) * 1.45f
+      val dropZ = playerZ + cos(playerYawRad) * 1.45f
+      val dropY = computeGroundHeight(dropX, dropZ, playerY + 0.4f)
+      worldLootItems +=
+        WorldLootItem(
+          uid = "loot_${++lootUidSeq}",
+          kind = removed.kind,
+          x = dropX,
+          y = dropY,
+          z = dropZ,
+          pickupCooldownSec = 3.2f,
+        )
+    }
+    onCombatSfx?.invoke(CombatSfxEvent.KICK)
+    showBanner("REMOVED ${removed.kind.displayName} (${bagItems.size}/$MAX_BAG_SLOTS)")
+    return true
+  }
+
+  @Synchronized
   fun returnToLobby() {
+    if (isPlaying && !matchCoinsAwarded && (matchElapsedSec >= 4f || npcDefeatedCount > matchStartKoCount)) {
+      awardMatchCoinsIfNeeded(isEliminated = false)
+      showBanner("MATCH COMPLETE · +$lastMatchCoinsEarned COINS SAVED")
+    }
     isPlaying = false
     isPaused = false
     isGunShopOpen = false
+    isStyleShopOpen = false
+    isBagOpen = false
+    isPlayerEliminated = false
+    isSpectatingKiller = false
+    playerFallProgress = 0f
+    spectatedKillerPedId = null
+    playerHealth = 100f
+    wantedLevel = 0
     dropPhase = DropPhase.GROUND
     activeVehicle = null
     activeBoat = null
@@ -836,8 +1320,199 @@ class GameSimulation(val world: WorldData) {
     activeParkour = null
     isSitting = false
     isScoped = false
+    input.sprintHeld = false
+    input.autoSprint = false
     sitProgress = 0f
     lobbyHeroYawRad = 0.16f
+    onEconomyChanged?.invoke()
+  }
+
+  @Synchronized
+  fun startSpectatingKiller() {
+    if (!isPlaying || !isPlayerEliminated) return
+    ensureLiveSpectatedTarget()
+    isSpectatingKiller = true
+    val target = pedestrians.firstOrNull { it.id == spectatedKillerPedId }
+    val label = target?.let { rivalDisplayName(it) } ?: eliminatedByName ?: "KILLER"
+    showBanner("SPECTATING $label · VIEW ONLY")
+  }
+
+  @Synchronized
+  fun openStyleShop() {
+    isStyleShopOpen = true
+    isGunShopOpen = false
+    isBagOpen = false
+  }
+
+  @Synchronized
+  fun closeStyleShop() {
+    isStyleShopOpen = false
+  }
+
+  @Synchronized
+  fun currentHeroAppearance(): com.example.game.world.CharacterAppearance {
+    val base = HERO_PRESETS.getOrElse(heroPresetIndex) { "HERO" to com.example.game.world.CartoonPresets.PLAYER_HERO }.second
+    val tunic = equippedCloth.tunicColor ?: base.tunicColor
+    val vest = if (equippedCloth != ClothStyle.PRESET_DEFAULT) equippedCloth.vestColor else base.vestColor
+    val hairStyle = equippedHair.hairStyle ?: base.hairStyle
+    val hairColor = equippedHair.hairColor ?: base.hairColor
+    val pants = equippedPants.pantsColor ?: base.pantsColor
+    return base.copy(
+      hairStyle = hairStyle,
+      tunicColor = tunic,
+      vestColor = vest,
+      pantsColor = pants,
+      hairColor = hairColor,
+    )
+  }
+
+  @Synchronized
+  fun buyOrEquipCloth(style: ClothStyle): Boolean {
+    if (style in ownedCloths) {
+      equippedCloth = style
+      onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      showBanner("EQUIPPED: ${style.displayName}")
+      onEconomyChanged?.invoke()
+      return true
+    }
+    if (playerCash >= style.price) {
+      playerCash -= style.price
+      ownedCloths += style
+      equippedCloth = style
+      onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      showBanner("UNLOCKED: ${style.displayName}!")
+      onEconomyChanged?.invoke()
+      return true
+    }
+    showBanner("NEED $${style.price - playerCash} MORE COINS")
+    return false
+  }
+
+  @Synchronized
+  fun buyOrEquipHair(style: HairCustomization): Boolean {
+    if (style in ownedHairs) {
+      equippedHair = style
+      onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      showBanner("EQUIPPED: ${style.displayName}")
+      onEconomyChanged?.invoke()
+      return true
+    }
+    if (playerCash >= style.price) {
+      playerCash -= style.price
+      ownedHairs += style
+      equippedHair = style
+      onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      showBanner("UNLOCKED: ${style.displayName}!")
+      onEconomyChanged?.invoke()
+      return true
+    }
+    showBanner("NEED $${style.price - playerCash} MORE COINS")
+    return false
+  }
+
+  @Synchronized
+  fun buyOrEquipPants(style: PantsStyle): Boolean {
+    if (style in ownedPants) {
+      equippedPants = style
+      onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      showBanner("EQUIPPED: ${style.displayName}")
+      onEconomyChanged?.invoke()
+      return true
+    }
+    if (playerCash >= style.price) {
+      playerCash -= style.price
+      ownedPants += style
+      equippedPants = style
+      onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      showBanner("UNLOCKED: ${style.displayName}!")
+      onEconomyChanged?.invoke()
+      return true
+    }
+    showBanner("NEED $${style.price - playerCash} MORE COINS")
+    return false
+  }
+
+  @Synchronized
+  fun buyOrEquipGunSkin(skin: GunSkin): Boolean {
+    if (skin in ownedGunSkins) {
+      equippedGunSkin = skin
+      onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      showBanner("GUN PAINT: ${skin.displayName}")
+      onEconomyChanged?.invoke()
+      return true
+    }
+    if (playerCash >= skin.price) {
+      playerCash -= skin.price
+      ownedGunSkins += skin
+      equippedGunSkin = skin
+      onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      showBanner("UNLOCKED PAINT: ${skin.displayName}!")
+      onEconomyChanged?.invoke()
+      return true
+    }
+    showBanner("NEED $${skin.price - playerCash} MORE COINS")
+    return false
+  }
+
+  @Synchronized
+  fun buyOrEquipCarSkin(skin: CarSkin): Boolean {
+    if (skin in ownedCarSkins) {
+      equippedCarSkin = skin
+      onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      showBanner("CAR SKIN: ${skin.displayName}")
+      onEconomyChanged?.invoke()
+      return true
+    }
+    if (playerCash >= skin.price) {
+      playerCash -= skin.price
+      ownedCarSkins += skin
+      equippedCarSkin = skin
+      onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      showBanner("UNLOCKED CAR: ${skin.displayName}!")
+      onEconomyChanged?.invoke()
+      return true
+    }
+    showBanner("NEED $${skin.price - playerCash} MORE COINS")
+    return false
+  }
+
+  @Synchronized
+  fun applyCustomizationState(
+    cloth: ClothStyle,
+    ownedClothsSet: Set<ClothStyle>,
+    hair: HairCustomization,
+    ownedHairsSet: Set<HairCustomization>,
+    pants: PantsStyle,
+    ownedPantsSet: Set<PantsStyle>,
+    gunSkin: GunSkin,
+    ownedGunSkinsSet: Set<GunSkin>,
+    carSkin: CarSkin,
+    ownedCarSkinsSet: Set<CarSkin>,
+  ) {
+    ownedCloths.clear()
+    ownedCloths += ClothStyle.PRESET_DEFAULT
+    ownedCloths += ownedClothsSet
+    equippedCloth = if (cloth in ownedCloths) cloth else ClothStyle.PRESET_DEFAULT
+
+    ownedHairs.clear()
+    ownedHairs += HairCustomization.PRESET_DEFAULT
+    ownedHairs += ownedHairsSet
+    equippedHair = if (hair in ownedHairs) hair else HairCustomization.PRESET_DEFAULT
+
+    ownedPants.clear()
+    ownedPants += PantsStyle.PRESET_DEFAULT
+    ownedPants += ownedPantsSet
+    equippedPants = if (pants in ownedPants) pants else PantsStyle.PRESET_DEFAULT
+
+    ownedGunSkins.clear()
+    ownedGunSkins += GunSkin.STANDARD_STEEL
+    ownedGunSkins += ownedGunSkinsSet
+    equippedGunSkin = if (gunSkin in ownedGunSkins) gunSkin else GunSkin.STANDARD_STEEL
+
+    ownedCarSkins.clear()
+    ownedCarSkins += CarSkin.FACTORY_DEFAULT
+    ownedCarSkins += ownedCarSkinsSet
+    equippedCarSkin = if (carSkin in ownedCarSkins) carSkin else CarSkin.FACTORY_DEFAULT
   }
 
   @Synchronized
@@ -924,13 +1599,31 @@ class GameSimulation(val world: WorldData) {
   @Synchronized
   fun lobbySquadSnapshot(): List<LobbySquadMember> = lobbySquadMembers.toList()
 
+  @Synchronized
+  fun applyCloudAccountDefaults(
+    heroIndex: Int,
+    equipped: WeaponType,
+    owned: Set<WeaponType>,
+    cash: Int,
+    koCount: Int,
+  ) {
+    heroPresetIndex = heroIndex.coerceIn(0, HERO_PRESETS.lastIndex)
+    purchasedWeapons.clear()
+    purchasedWeapons += WeaponType.FISTS
+    purchasedWeapons += owned
+    recomputeOwnedWeaponsFromPurchasedAndBag()
+    equippedWeapon = if (equipped in ownedWeapons) equipped else WeaponType.FISTS
+    playerCash = cash.coerceAtLeast(0)
+    npcDefeatedCount = koCount.coerceAtLeast(0)
+  }
+
   private fun activateLobbyAiSquadmatesInWorld() {
     val aiLobbyMembers = lobbySquadMembers.filter { !it.isRemoteP2P }
     if (aiLobbyMembers.isEmpty()) return
     for (ped in pedestrians) {
       ped.isFriend = false
     }
-    val candidates = pedestrians.filter { !it.isBraveDefender }
+    val candidates = pedestrians.filter { !it.isBraveDefender && !it.isRivalFighter }
     for ((slotIdx, member) in aiLobbyMembers.withIndex()) {
       val ped = candidates.getOrNull(slotIdx) ?: break
       ped.isFriend = true
@@ -950,16 +1643,34 @@ class GameSimulation(val world: WorldData) {
       equippedWeapon = weapon
       if (weapon == WeaponType.FISTS) isScoped = false
       onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      onEconomyChanged?.invoke()
       return true
     }
     if (playerCash >= weapon.price) {
       playerCash -= weapon.price
+      purchasedWeapons += weapon
       ownedWeapons += weapon
       equippedWeapon = weapon
       onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      onEconomyChanged?.invoke()
       return true
     }
     return false
+  }
+
+  private fun recomputeOwnedWeaponsFromPurchasedAndBag() {
+    ownedWeapons.clear()
+    ownedWeapons += purchasedWeapons
+    for (item in bagItems) {
+      item.kind.weapon?.let { ownedWeapons += it }
+    }
+    if (equippedWeapon !in ownedWeapons) {
+      equippedWeapon = ownedWeapons.lastOrNull() ?: WeaponType.FISTS
+      if (equippedWeapon == WeaponType.FISTS) {
+        isScoped = false
+        weaponAimTimerSec = 0f
+      }
+    }
   }
 
   @Synchronized
@@ -1002,7 +1713,8 @@ class GameSimulation(val world: WorldData) {
     updateGunShopProximity()
   }
 
-  private fun showBanner(text: String) {
+  @Synchronized
+  internal fun showBanner(text: String) {
     lastHitBanner = text
     hitBannerTimerSec = 1.6f
   }
@@ -1011,6 +1723,9 @@ class GameSimulation(val world: WorldData) {
     isPlaying &&
       !isPaused &&
       !isGunShopOpen &&
+      !isStyleShopOpen &&
+      !isBagOpen &&
+      !isPlayerEliminated &&
       dropPhase == DropPhase.GROUND &&
       activeVehicle == null &&
       activeBoat == null &&
@@ -1206,7 +1921,7 @@ class GameSimulation(val world: WorldData) {
     alertNearbyPeople(playerX, playerZ, radius = 38f, isGunfire = true)
   }
 
-  private fun applyDamageToPedestrian(
+  internal fun applyDamageToPedestrian(
     ped: PedestrianRuntimeState,
     damage: Float,
     knockbackSpeed: Float,
@@ -1215,8 +1930,25 @@ class GameSimulation(val world: WorldData) {
     hitZone: HitZone,
     fromGunfire: Boolean,
     fromPlayer: Boolean,
+    attackerBot: PedestrianRuntimeState? = null,
   ) {
-    ped.hp = max(0f, ped.hp - damage)
+    var effectiveDamage = damage
+    var armorAbsorbed = false
+    if (hitZone == HitZone.HEAD && ped.helmetLevel >= 3 && ped.helmetDurability > 0f) {
+      val ratio = if (ped.helmetLevel >= 4) 0.55f else 0.40f
+      effectiveDamage = damage * (1f - ratio)
+      ped.helmetDurability = max(0f, ped.helmetDurability - damage * 0.55f)
+      if (ped.helmetDurability <= 0f) ped.helmetLevel = 0
+      armorAbsorbed = true
+    } else if (hitZone != HitZone.HEAD && ped.vestLevel >= 3 && ped.vestDurability > 0f) {
+      val ratio = if (ped.vestLevel >= 4) 0.58f else 0.42f
+      effectiveDamage = damage * (1f - ratio)
+      ped.vestDurability = max(0f, ped.vestDurability - damage * 0.60f)
+      if (ped.vestDurability <= 0f) ped.vestLevel = 0
+      armorAbsorbed = true
+    }
+
+    ped.hp = max(0f, ped.hp - effectiveDamage)
     ped.vx = dirX * knockbackSpeed
     ped.vz = dirZ * knockbackSpeed
     ped.hitReactZone = hitZone
@@ -1225,6 +1957,10 @@ class GameSimulation(val world: WorldData) {
 
     if (fromPlayer && !ped.isFriend) {
       ped.isHostileTarget = true
+      ped.targetPlayer = true
+    } else if (attackerBot != null && !ped.isFriend && attackerBot.id != ped.id) {
+      ped.isHostileTarget = true
+      ped.targetEnemyBotId = attackerBot.id
     }
 
     val sparkY =
@@ -1241,6 +1977,7 @@ class GameSimulation(val world: WorldData) {
         z = ped.z,
         color =
           when {
+            armorAbsorbed -> floatArrayOf(0.28f, 0.88f, 1.0f)
             hitZone == HitZone.HEAD -> floatArrayOf(1.0f, 0.16f, 0.22f)
             fromGunfire -> floatArrayOf(1.0f, 0.36f, 0.24f)
             else -> floatArrayOf(1.0f, 0.76f, 0.20f)
@@ -1252,6 +1989,8 @@ class GameSimulation(val world: WorldData) {
         when {
           ped.hp <= 0f && hitZone == HitZone.HEAD -> "HEADSHOT KO! +$45"
           ped.hp <= 0f -> "KNOCKOUT! +$45"
+          armorAbsorbed && hitZone == HitZone.HEAD -> "ARMORED HELMET HIT!"
+          armorAbsorbed -> "VEST ARMOR HIT!"
           hitZone == HitZone.HEAD && fromGunfire -> "HEADSHOT CRIT!"
           hitZone == HitZone.HEAD -> "HEAD STRIKE!"
           hitZone == HitZone.LEGS -> "LOW LEG HIT!"
@@ -1261,20 +2000,34 @@ class GameSimulation(val world: WorldData) {
     }
 
     if (ped.hp <= 0f) {
+      if (ped.drivingVehicleId != null) {
+        botController.releaseBotVehicle(ped)
+      }
       ped.reactionState = NpcReactionState.KNOCKED_DOWN
       ped.downedTimerSec = 0f
-      ped.respawnTimerSec = 7.5f
+      ped.respawnTimerSec = if (ped.isRivalFighter) 18.0f else 10.0f
       ped.attackMove = null
       ped.isHostileTarget = false
-      npcDefeatedCount++
-      playerCash += 45
+      ped.targetEnemyBotId = null
+      ped.targetPlayer = false
+      if (ped.isRivalFighter || ped.weapon != WeaponType.FISTS || ped.botMedkits > 0) {
+        dropRivalLoot(ped)
+      }
       if (fromPlayer) {
+        npcDefeatedCount++
+        playerCash += 65
+        onEconomyChanged?.invoke()
         wantedLevel = min(5, max(1, wantedLevel + 1))
         wantedDecaySec = 18f
+        onCombatSfx?.invoke(CombatSfxEvent.CASH)
+      } else if (attackerBot != null) {
+        showBanner("${rivalDisplayName(attackerBot)} KO'D ${rivalDisplayName(ped)}")
       }
-      onCombatSfx?.invoke(CombatSfxEvent.CASH)
     } else if (ped.isFriend) {
       ped.reactionState = NpcReactionState.COMPANION
+    } else if (ped.isRivalFighter || ped.weapon != WeaponType.FISTS || attackerBot != null) {
+      ped.reactionState = NpcReactionState.FIGHTING_BACK
+      ped.panicTimerSec = 18f
     } else if (fromGunfire || !ped.isBraveDefender || ped.hp < 35f) {
       ped.reactionState = NpcReactionState.HANDS_UP_FLINCH
       ped.panicTimerSec = 9.5f
@@ -1327,6 +2080,13 @@ class GameSimulation(val world: WorldData) {
       if (ped.reactionState == NpcReactionState.KNOCKED_DOWN || ped.isFriend) continue
       val d = CollisionSolver.distXZ(ped.x, ped.z, originX, originZ)
       if (d > radius) continue
+
+      if (ped.isRivalFighter) {
+        ped.reactionState = NpcReactionState.FIGHTING_BACK
+        ped.panicTimerSec = 18f
+        ped.isHostileTarget = true
+        continue
+      }
 
       if (isGunfire) {
         if (ped.reactionState == NpcReactionState.STROLLING || ped.reactionState == NpcReactionState.FIGHTING_BACK) {
@@ -1668,6 +2428,9 @@ class GameSimulation(val world: WorldData) {
 
       v.x += fwdX * v.forwardSpeed * dt
       v.z += fwdZ * v.forwardSpeed * dt
+      v.y = computeGroundHeight(v.x, v.z, v.y + 0.45f)
+      val (slopePitch, _) = TerrainHeightfield.computeSlopeAngles(v.x, v.z, v.yawRad)
+      v.pitchRad += (slopePitch - v.pitchRad) * (dt * 8f).coerceAtMost(1f)
       v.wheelSpinRad += (v.forwardSpeed / 0.36f) * dt
       v.rollRad = (v.steerAngle * (v.forwardSpeed / 22f) * 0.045f).coerceIn(-0.06f, 0.06f)
     }
@@ -1700,205 +2463,10 @@ class GameSimulation(val world: WorldData) {
   }
 
   private fun stepPedestrians(dt: Float) {
-    for (ped in pedestrians) {
-      if (ped.hitReactTimerSec > 0f) {
-        ped.hitReactTimerSec = max(0f, ped.hitReactTimerSec - dt)
-        if (ped.hitReactTimerSec <= 0f) ped.hitReactZone = HitZone.NONE
-      }
-
-      if (abs(ped.vx) > 0.05f || abs(ped.vz) > 0.05f) {
-        val nx = ped.x + ped.vx * dt
-        val nz = ped.z + ped.vz * dt
-        val (rx, rz, _) =
-          CollisionSolver.resolveAll(
-            nx,
-            nz,
-            0.38f,
-            world.aabbColliders,
-            world.circleColliders,
-            entityMinY = ped.y,
-            entityMaxY = ped.y + 1.75f,
-          )
-        val clamped = CollisionSolver.clampCarToIsland(rx, rz, margin = 2.0f)
-        ped.x = clamped.first
-        ped.z = clamped.second
-        ped.vx *= 0.84f
-        ped.vz *= 0.84f
-      } else {
-        ped.vx = 0f
-        ped.vz = 0f
-      }
-
-      if (ped.attackCooldownSec > 0f) {
-        ped.attackCooldownSec = max(0f, ped.attackCooldownSec - dt)
-      }
-
-      if (ped.isFriend && ped.reactionState != NpcReactionState.KNOCKED_DOWN) {
-        stepCompanion(ped, dt)
-        ped.y = computeGroundHeight(ped.x, ped.z, ped.y)
-        continue
-      }
-
-      ped.y = computeGroundHeight(ped.x, ped.z, ped.y)
-
-      when (ped.reactionState) {
-        NpcReactionState.KNOCKED_DOWN -> {
-          ped.fallProgress = min(1f, ped.fallProgress + 4.5f * dt)
-          ped.armsUpNorm = max(0f, ped.armsUpNorm - 4f * dt)
-          ped.sitProgress = 0f
-          ped.downedTimerSec += dt
-          ped.respawnTimerSec -= dt
-          if (ped.respawnTimerSec <= 0f) {
-            ped.x = ped.spawnX
-            ped.z = ped.spawnZ
-            ped.hp = ped.maxHp
-            ped.fallProgress = 0f
-            ped.armsUpNorm = 0f
-            ped.hitReactZone = HitZone.NONE
-            ped.hitReactTimerSec = 0f
-            ped.isHostileTarget = false
-            ped.reactionState =
-              if (ped.isFriend) NpcReactionState.COMPANION else NpcReactionState.STROLLING
-            ped.targetIdx = 1 % ped.waypoints.size
-          }
-        }
-        NpcReactionState.HANDS_UP_FLINCH -> {
-          ped.armsUpNorm = min(1f, ped.armsUpNorm + 7f * dt)
-          ped.fallProgress = 0f
-          ped.downedTimerSec += dt
-          val toPlayerX = playerX - ped.x
-          val toPlayerZ = playerZ - ped.z
-          if (hypot(toPlayerX, toPlayerZ) > 0.1f) {
-            ped.yawRad =
-              lerpAngleRad(ped.yawRad, angleBetweenXZ(toPlayerX, toPlayerZ), (dt * 12f).coerceAtMost(1f))
-          }
-          if (ped.downedTimerSec >= 0.36f) {
-            ped.downedTimerSec = 0f
-            ped.reactionState = NpcReactionState.FLEEING
-          }
-        }
-        NpcReactionState.FLEEING -> {
-          ped.armsUpNorm = (0.55f + sin(worldTimeSec * 9f + ped.spawnX) * 0.25f).coerceIn(0.2f, 0.9f)
-          ped.fallProgress = 0f
-          ped.panicTimerSec -= dt
-
-          val awayX = ped.x - playerX
-          val awayZ = ped.z - playerZ
-          val distFromPlayer = hypot(awayX, awayZ).coerceAtLeast(0.05f)
-          val dirX = awayX / distFromPlayer
-          val dirZ = awayZ / distFromPlayer
-
-          ped.yawRad = lerpAngleRad(ped.yawRad, angleBetweenXZ(dirX, dirZ), (dt * 11f).coerceAtMost(1f))
-
-          val fleeSpeed = 5.6f
-          val nextX = ped.x + dirX * fleeSpeed * dt
-          val nextZ = ped.z + dirZ * fleeSpeed * dt
-          val (rx, rz, hitWall) =
-            CollisionSolver.resolveAll(nextX, nextZ, 0.40f, world.aabbColliders, world.circleColliders)
-
-          var finalX = rx
-          var finalZ = rz
-          if (hitWall) {
-            val sideX = ped.x + (-dirZ) * fleeSpeed * dt * 0.7f
-            val sideZ = ped.z + dirX * fleeSpeed * dt * 0.7f
-            val sideRes =
-              CollisionSolver.resolveAll(sideX, sideZ, 0.40f, world.aabbColliders, world.circleColliders)
-            if (hypot(sideRes.first - ped.x, sideRes.second - ped.z) >
-              hypot(rx - ped.x, rz - ped.z)
-            ) {
-              finalX = sideRes.first
-              finalZ = sideRes.second
-            }
-          }
-          val clamped = CollisionSolver.clampCarToIsland(finalX, finalZ, margin = 2.2f)
-          ped.x = clamped.first
-          ped.z = clamped.second
-          ped.walkCycle += dt * 13.5f
-
-          if (ped.panicTimerSec <= 0f && distFromPlayer > 22f) {
-            ped.reactionState = NpcReactionState.STROLLING
-            ped.armsUpNorm = 0f
-          }
-        }
-        NpcReactionState.FIGHTING_BACK -> {
-          ped.armsUpNorm = max(0f, ped.armsUpNorm - 6f * dt)
-          ped.fallProgress = 0f
-          ped.panicTimerSec -= dt
-
-          if (activeVehicle != null || activeBoat != null || ped.panicTimerSec <= 0f) {
-            ped.reactionState = NpcReactionState.STROLLING
-            ped.attackMove = null
-            continue
-          }
-
-          val toPlayerX = playerX - ped.x
-          val toPlayerZ = playerZ - ped.z
-          val dist = hypot(toPlayerX, toPlayerZ).coerceAtLeast(0.05f)
-          val nx = toPlayerX / dist
-          val nz = toPlayerZ / dist
-          ped.yawRad = lerpAngleRad(ped.yawRad, angleBetweenXZ(nx, nz), (dt * 10f).coerceAtMost(1f))
-
-          if (ped.attackMove != null) {
-            ped.attackProgress += dt / ped.attackMove!!.durationSec
-            if (ped.attackProgress >= 0.45f && ped.attackCooldownSec <= 0f && dist < 2.1f && !isSwimming) {
-              playerHealth = max(0f, playerHealth - 6f)
-              regenCooldownSec = 4.5f
-              ped.attackCooldownSec = 1.05f
-              hitSparks += HitSparkState(playerX, playerY + 1.15f, playerZ, floatArrayOf(1.0f, 0.35f, 0.2f))
-              onCombatSfx?.invoke(CombatSfxEvent.HIT)
-            }
-            if (ped.attackProgress >= 1f) {
-              ped.attackMove = null
-              ped.attackProgress = 0f
-            }
-          } else if (dist > 1.55f) {
-            val nextX = ped.x + nx * 3.8f * dt
-            val nextZ = ped.z + nz * 3.8f * dt
-            val (rx, rz, _) =
-              CollisionSolver.resolveAll(nextX, nextZ, 0.40f, world.aabbColliders, world.circleColliders)
-            val clamped = CollisionSolver.clampCarToIsland(rx, rz, margin = 2.0f)
-            ped.x = clamped.first
-            ped.z = clamped.second
-            ped.walkCycle += dt * 10.5f
-          } else if (ped.attackCooldownSec <= 0f) {
-            ped.attackMove = CombatMoveType.PUNCH_JAB
-            ped.attackProgress = 0f
-          }
-        }
-        NpcReactionState.COMPANION -> stepCompanion(ped, dt)
-        NpcReactionState.STROLLING -> {
-          ped.armsUpNorm = max(0f, ped.armsUpNorm - 4f * dt)
-          ped.fallProgress = max(0f, ped.fallProgress - 4f * dt)
-          ped.attackMove = null
-
-          val wp = ped.waypoints[ped.targetIdx]
-          val dx = wp.first - ped.x
-          val dz = wp.second - ped.z
-          val dist = hypot(dx, dz)
-
-          if (dist < 0.8f) {
-            if (ped.waypoints.size == 2) ped.targetIdx = 1 - ped.targetIdx
-            else ped.targetIdx = (ped.targetIdx + 1) % ped.waypoints.size
-            continue
-          }
-
-          if (isPlaying && activeVehicle == null && activeBoat == null) {
-            val pd = CollisionSolver.distXZ(ped.x, ped.z, playerX, playerZ)
-            if (pd < 1.15f) continue
-          }
-
-          val nx = dx / dist
-          val nz = dz / dist
-          ped.yawRad = lerpAngleRad(ped.yawRad, angleBetweenXZ(nx, nz), (dt * 8f).coerceAtMost(1f))
-          ped.x += nx * ped.speed * dt
-          ped.z += nz * ped.speed * dt
-          ped.walkCycle += dt * ped.speed * 4.0f
-        }
-      }
-    }
+    botController.stepAllBots(dt)
   }
 
-  private fun stepCompanion(friend: PedestrianRuntimeState, dt: Float) {
+  internal fun stepCompanion(friend: PedestrianRuntimeState, dt: Float) {
     friend.reactionState = NpcReactionState.COMPANION
     friend.armsUpNorm = 0f
     friend.fallProgress = 0f
@@ -2041,7 +2609,9 @@ class GameSimulation(val world: WorldData) {
 
   @Synchronized
   fun triggerParkour(): Boolean {
-    if (!isPlaying || isPaused || isGunShopOpen || dropPhase != DropPhase.GROUND) return false
+    if (!isPlaying || isPaused || isGunShopOpen || isStyleShopOpen || isPlayerEliminated || dropPhase != DropPhase.GROUND) {
+      return false
+    }
     if (activeVehicle != null || activeBoat != null || activeCarjack != null || activeParkour != null || isSwimming) {
       return false
     }
@@ -2122,7 +2692,7 @@ class GameSimulation(val world: WorldData) {
     }
   }
 
-  private fun isPointBlockedBySolidAabb(
+  internal fun isPointBlockedBySolidAabb(
     px: Float,
     pz: Float,
     minCheckY: Float,
@@ -2407,8 +2977,13 @@ class GameSimulation(val world: WorldData) {
     when {
       dropDist >= 4.6f -> {
         val dmg = ((dropDist - 4.3f) * 9.0f).coerceIn(14f, 72f)
-        playerHealth = max(0f, playerHealth - dmg)
-        regenCooldownSec = 5.5f
+        applyIncomingDamageToPlayer(
+          rawDamage = dmg,
+          hitZone = HitZone.LEGS,
+          attackerId = null,
+          attackerName = "ROOFTOP FALL",
+          attackerWeapon = WeaponType.FISTS,
+        )
         activeLandingReaction = LandingReactionType.HARD_STAGGER
         landingReactionDurationSec = 0.86f
         landingReactionTimerSec = 0.86f
@@ -2446,9 +3021,23 @@ class GameSimulation(val world: WorldData) {
 
   private fun stepOnFoot(dt: Float) {
     playerArmReachNorm = 0f
-    val mx = input.moveX.coerceIn(-1f, 1f)
-    val my = input.moveY.coerceIn(-1f, 1f)
-    val mag = hypot(mx, my).coerceAtMost(1f)
+    val rawMx = input.moveX.coerceIn(-1f, 1f)
+    val rawMy = input.moveY.coerceIn(-1f, 1f)
+    val rawMag = hypot(rawMx, rawMy).coerceAtMost(1f)
+    val autoSprintActive = input.autoSprint && !isSitting && !isScoped && activeAttackMove == null
+    val mx: Float
+    val my: Float
+    val mag: Float
+    if (autoSprintActive && rawMag < 0.14f) {
+      // One-tap Auto-Sprint runs straight ahead along camera heading without holding the joystick
+      mx = 0f
+      my = -1f
+      mag = 1f
+    } else {
+      mx = rawMx
+      my = rawMy
+      mag = rawMag
+    }
 
     // Deep water only applies near ocean level (not while skydiving/on upper balconies)
     val inWater = playerY < 1.0f && CollisionSolver.isInDeepWater(playerX, playerZ)
@@ -2508,7 +3097,7 @@ class GameSimulation(val world: WorldData) {
 
     val isRolling = activeLandingReaction == LandingReactionType.COMBAT_ROLL && landingReactionTimerSec > 0.08f
     val isStaggered = activeLandingReaction == LandingReactionType.HARD_STAGGER && landingReactionTimerSec > 0.30f
-    val sprinting = input.sprintHeld && mag > 0.2f && !isSitting && !isScoped && activeAttackMove == null && !isStaggered
+    val sprinting = (input.sprintHeld || input.autoSprint) && mag > 0.2f && !isSitting && !isScoped && activeAttackMove == null && !isStaggered
     val targetSpeed =
       when {
         isSitting || sitProgress > 0.4f -> 0f
@@ -2670,7 +3259,8 @@ class GameSimulation(val world: WorldData) {
         entityMinY = playerY,
         entityMaxY = playerY + 1.75f,
       )
-    val clamped = CollisionSolver.clampSwimmerToWorld(rx, rz)
+    val glooResolved = resolveEntityVsGlooWalls(rx, rz, 0.44f, playerY)
+    val clamped = CollisionSolver.clampSwimmerToWorld(glooResolved.first, glooResolved.second)
     playerX = clamped.first
     playerZ = clamped.second
 
@@ -2754,10 +3344,13 @@ class GameSimulation(val world: WorldData) {
     car.x += (fwdX * car.forwardSpeed + rightX * car.lateralSpeed) * dt
     car.z += (fwdZ * car.forwardSpeed + rightZ * car.lateralSpeed) * dt
 
-    val targetPitch = (-longAccel * 0.0028f).coerceIn(-0.07f, 0.07f)
-    val targetRoll = (yawRate * (speedAbs / 24f) * 0.055f).coerceIn(-0.08f, 0.08f)
-    car.pitchRad += (targetPitch - car.pitchRad) * (dt * 8f).coerceAtMost(1f)
-    car.rollRad += (targetRoll - car.rollRad) * (dt * 8f).coerceAtMost(1f)
+    val targetTerrainY = computeGroundHeight(car.x, car.z, car.y + 0.55f)
+    car.y += (targetTerrainY - car.y) * (dt * 14f).coerceAtMost(1f)
+    val (slopePitch, slopeRoll) = TerrainHeightfield.computeSlopeAngles(car.x, car.z, car.yawRad)
+    val targetPitch = (slopePitch - longAccel * 0.0028f).coerceIn(-0.44f, 0.44f)
+    val targetRoll = (slopeRoll + yawRate * (speedAbs / 24f) * 0.055f).coerceIn(-0.34f, 0.34f)
+    car.pitchRad += (targetPitch - car.pitchRad) * (dt * 9f).coerceAtMost(1f)
+    car.rollRad += (targetRoll - car.rollRad) * (dt * 9f).coerceAtMost(1f)
     car.wheelSpinRad += (car.forwardSpeed / 0.36f) * dt
 
     dynamicVehicleColliders.clear()
@@ -2805,15 +3398,19 @@ class GameSimulation(val world: WorldData) {
       car.lateralSpeed *= 0.4f
     }
 
+    val glooResolved = resolveEntityVsGlooWalls(car.x, car.z, 1.35f, 0.25f)
+    car.x = glooResolved.first
+    car.z = glooResolved.second
     val clamped = CollisionSolver.clampCarToIsland(car.x, car.z, margin = 2.0f)
     if (clamped.first != car.x || clamped.second != car.z) {
       car.x = clamped.first
       car.z = clamped.second
       car.forwardSpeed *= 0.6f
     }
+    car.y = computeGroundHeight(car.x, car.z, car.y + 0.55f)
 
     playerX = car.x
-    playerY = 0.25f
+    playerY = car.y + 0.25f
     playerZ = car.z
     playerYawRad = car.yawRad
   }
@@ -2893,19 +3490,26 @@ class GameSimulation(val world: WorldData) {
   }
 
   fun computeGroundHeight(x: Float, z: Float, curY: Float = 0f): Float {
-    var bestHeight =
+    val roadBaseHeight =
       when {
         x in 22.8f..32.2f && z in -3.5f..6.2f -> 0.12f
         CollisionSolver.isOnPierOrDock(x, z) -> 0.24f
         CollisionSolver.isOnBridge(x, z) -> 0.12f
-        (abs(z - 16f) < 5f || abs(z + 24f) < 5f) && (abs(x) < 47f || x in 101f..195f || x in -197f..-101f) -> 0.04f
+        // Highland Drive & North Parkway Connectors
+        abs(z + 96f) < 5.2f && x in -266f..266f -> 0.08f
+        x in 236f..296f && z in -22f..14f -> 0.08f
+        (abs(z - 16f) < 5f || abs(z + 24f) < 5f) &&
+          (abs(x) < 47f || x in 101f..299f || x in -276f..-101f) -> 0.04f
         (abs(x + 42f) < 5f || abs(x - 42f) < 5f || abs(x - 106f) < 5f || abs(x - 148f) < 5f || abs(x - 190f) < 5f ||
-          abs(x + 104f) < 5f || abs(x + 194f) < 5f) &&
+          abs(x - 233f) < 5f || abs(x - 299f) < 5f || abs(x + 104f) < 5f || abs(x + 194f) < 5f ||
+          abs(x + 233f) < 5f || abs(x + 273f) < 5f) &&
           z in -29f..21f -> 0.04f
-        abs(x + 148f) < 5.3f && z in -59f..50f -> 0.05f
+        abs(x + 148f) < 5.3f && z in -62f..50f -> 0.05f
+        (abs(x) < 5f || abs(x - 148f) < 5f) && z in -96f..-20f -> 0.05f
         abs(x) < 4.6f && z in -21f..13f -> 0.04f
         else -> 0f
       }
+    var bestHeight = max(roadBaseHeight, TerrainHeightfield.elevationAt(x, z).coerceAtLeast(0f))
 
     // Check multi-story floors, ramps, staircases, rooftops, crates, and 2nd-floor balconies below/at entity reach
     for (surface in world.walkableFloors) {
@@ -2928,7 +3532,7 @@ class GameSimulation(val world: WorldData) {
     }
 
     // Check parked/slow vehicle hoods and roofs
-    if (curY in 0.45f..2.6f) {
+    if (curY >= 0.45f) {
       for (car in vehicles) {
         if (abs(car.forwardSpeed) > 1.8f) continue
         val dx = x - car.x
@@ -2938,7 +3542,7 @@ class GameSimulation(val world: WorldData) {
         val lx = dx * c - dz * s
         val lz = dx * s + dz * c
         if (abs(lx) <= 0.96f && abs(lz) <= 2.12f) {
-          val carElev = if (abs(lz) <= 0.85f) 1.42f else 0.96f
+          val carElev = car.y + (if (abs(lz) <= 0.85f) 1.42f else 0.96f)
           if (carElev <= curY + 0.48f && carElev > bestHeight) {
             bestHeight = carElev
           }
@@ -2994,6 +3598,14 @@ class GameSimulation(val world: WorldData) {
     nearbyGunShop = d < 5.6f
   }
 
+  private fun updateMarketProximity() {
+    if (dropPhase != DropPhase.GROUND || activeVehicle != null || activeBoat != null || activeCarjack != null || isSwimming) {
+      nearbyMarketStallLabel = null
+      return
+    }
+    nearbyMarketStallLabel = livingWorld.nearestMarketStall(playerX, playerZ)?.name
+  }
+
   private fun updateFriendCandidate() {
     if (!canActOnFootCombat() || pedestrians.count { it.isFriend } >= 3) {
       nearbyFriendCandidate = null
@@ -3019,7 +3631,38 @@ class GameSimulation(val world: WorldData) {
     val carjack = activeCarjack
     val boat = activeBoat
     val car = activeVehicle
+    val spectateTarget =
+      if (isPlayerEliminated && isSpectatingKiller) {
+        pedestrians.firstOrNull { it.id == spectatedKillerPedId }
+      } else {
+        null
+      }
     when {
+      isPlayerEliminated && isSpectatingKiller && spectateTarget != null -> {
+        val dist = 5.6f
+        val pitch = camPitchRad.coerceIn(0.06f, 0.82f)
+        val targetLook = Vec3(spectateTarget.x, spectateTarget.y + 1.48f, spectateTarget.z)
+        val camX = targetLook.x + sin(camYawRad) * cos(pitch) * dist
+        val camZ = targetLook.z + cos(camYawRad) * cos(pitch) * dist
+        val camY = (targetLook.y + sin(pitch) * dist).coerceAtLeast(spectateTarget.y + 0.9f)
+        val smooth = (dt * 10f).coerceAtMost(1f)
+        camPos = Vec3.lerp(camPos, Vec3(camX, camY, camZ), smooth)
+        camLookAt = Vec3.lerp(camLookAt, targetLook, smooth)
+        camFovDeg += (62f - camFovDeg) * (dt * 8f).coerceAtMost(1f)
+      }
+      isPlayerEliminated -> {
+        val dist = 6.2f
+        val targetLook = Vec3(playerX, playerY + 0.85f, playerZ)
+        val orbitYaw = camYawRad + dt * 0.35f
+        camYawRad = normalizeAngleRad(orbitYaw)
+        val camX = targetLook.x + sin(camYawRad) * dist
+        val camZ = targetLook.z + cos(camYawRad) * dist
+        val camY = (targetLook.y + 2.6f).coerceAtLeast(playerY + 1.4f)
+        val smooth = (dt * 8f).coerceAtMost(1f)
+        camPos = Vec3.lerp(camPos, Vec3(camX, camY, camZ), smooth)
+        camLookAt = Vec3.lerp(camLookAt, targetLook, smooth)
+        camFovDeg += (64f - camFovDeg) * (dt * 8f).coerceAtMost(1f)
+      }
       dropPhase == DropPhase.AIRPLANE -> {
         val dist = 19.5f
         val targetLook = Vec3(planeX + sin(planeYawRad) * 6f, planeY - 2.0f, planeZ + cos(planeYawRad) * 6f)
@@ -3088,10 +3731,11 @@ class GameSimulation(val world: WorldData) {
         }
         val speedRatio = (abs(car.forwardSpeed) / car.maxSpeed).coerceIn(0f, 1f)
         val dist = cameraMode.carDist + speedRatio * 1.4f
-        val targetLook = Vec3(car.x, 1.22f, car.z)
+        val targetLook = Vec3(car.x, car.y + 1.22f, car.z)
         val camX = targetLook.x + sin(camYawRad) * cos(camPitchRad) * dist
         val camZ = targetLook.z + cos(camYawRad) * cos(camPitchRad) * dist
-        val camY = (targetLook.y + sin(camPitchRad) * dist + 0.65f).coerceAtLeast(1.0f)
+        val terrainClearY = TerrainHeightfield.elevationAt(camX, camZ) + 0.85f
+        val camY = (targetLook.y + sin(camPitchRad) * dist + 0.65f).coerceAtLeast(max(car.y + 1.0f, terrainClearY))
 
         val smooth = (dt * 12f).coerceAtMost(1f)
         camPos = Vec3.lerp(camPos, Vec3(camX, camY, camZ), smooth)
@@ -3128,9 +3772,10 @@ class GameSimulation(val world: WorldData) {
         val targetLook = Vec3(playerX + shakeX, playerY + 1.48f - sitLookDrop + camLandingDipY + shakeY, playerZ)
         val camX = targetLook.x + sin(camYawRad) * cos(pitch) * dist
         val camZ = targetLook.z + cos(camYawRad) * cos(pitch) * dist
-        val minH = playerY + 0.65f + camLandingDipY * 0.5f
+        val terrainClearY = TerrainHeightfield.elevationAt(camX, camZ) + 0.65f
+        val minH = max(playerY + 0.65f + camLandingDipY * 0.5f, terrainClearY)
         val maxH = if (insideEnclosed) playerY + 3.25f else playerY + 26f
-        val camY = (targetLook.y + sin(pitch) * dist).coerceIn(minH, maxH)
+        val camY = (targetLook.y + sin(pitch) * dist).coerceIn(minH, max(minH, maxH))
 
         val smooth = (dt * 14f).coerceAtMost(1f)
         camPos = Vec3.lerp(camPos, Vec3(camX, camY, camZ), smooth)
@@ -3143,7 +3788,7 @@ class GameSimulation(val world: WorldData) {
 
   @Synchronized
   fun toggleEnterExitVehicleOrBoat(): Boolean {
-    if (activeCarjack != null) return false
+    if (!isPlaying || isPlayerEliminated || activeCarjack != null) return false
 
     val currentBoat = activeBoat
     if (currentBoat != null) {
@@ -3184,7 +3829,7 @@ class GameSimulation(val world: WorldData) {
       val clamped = CollisionSolver.clampCarToIsland(rx, rz, margin = 0.6f)
       playerX = clamped.first
       playerZ = clamped.second
-      playerY = computeGroundHeight(playerX, playerZ)
+      playerY = computeGroundHeight(playerX, playerZ, currentCar.y + 0.65f)
       playerYawRad = currentCar.yawRad
       currentCar.isBraking = false
       currentCar.isDrifting = false
@@ -3195,6 +3840,7 @@ class GameSimulation(val world: WorldData) {
 
     isSitting = false
     isScoped = false
+    input.autoSprint = false
     sitProgress = 0f
 
     val targetBoat = nearbyBoat
@@ -3238,6 +3884,15 @@ class GameSimulation(val world: WorldData) {
     }
 
     if (targetCar != null) {
+      val botDriver = targetCar.driverBotId?.let { id -> pedestrians.firstOrNull { it.id == id } }
+      if (botDriver != null) {
+        botController.releaseBotVehicle(botDriver)
+        botDriver.reactionState = NpcReactionState.FIGHTING_BACK
+        botDriver.isHostileTarget = true
+        botDriver.targetPlayer = true
+        botDriver.panicTimerSec = 18f
+        showBanner("EJECTED ${rivalDisplayName(botDriver)}!")
+      }
       if (targetCar.isAiTraffic) {
         targetCar.isAiTraffic = false
         targetCar.forwardSpeed = 0f
@@ -3341,13 +3996,93 @@ class GameSimulation(val world: WorldData) {
     isSitting = false
     isScoped = false
     sitProgress = 0f
-    playerX = 22f
-    playerZ = 81.2f
+    playerX = -198f
+    playerZ = 90.0f
     playerY = 0.24f
     playerYawRad = 0f
     camYawRad = PI.toFloat()
     camPitchRad = 0.24f
   }
+
+  @Synchronized
+  fun teleportToMarket() {
+    teleportOnFootTo(world.marketCenter.first, world.marketCenter.second - 2.6f, (-PI / 4.0).toFloat())
+  }
+
+  @Synchronized
+  fun teleportToWaterfall() {
+    teleportOnFootTo(world.waterfallCenter.first, world.waterfallCenter.second, PI.toFloat())
+  }
+
+  @Synchronized
+  fun teleportToAtoll() {
+    teleportOnFootTo(world.atollCenter.first, world.atollCenter.second + 8f, 0f)
+  }
+
+  private fun teleportOnFootTo(tx: Float, tz: Float, yaw: Float) {
+    dropPhase = DropPhase.GROUND
+    activeVehicle = null
+    activeBoat = null
+    activeCarjack = null
+    isSwimming = false
+    isSitting = false
+    isScoped = false
+    sitProgress = 0f
+    activeParkour = null
+    activeLandingReaction = null
+    landingReactionTimerSec = 0f
+    playerX = tx
+    playerZ = tz
+    playerY = computeGroundHeight(tx, tz, 0f)
+    playerYawRad = yaw
+    airPeakY = playerY
+    airStartY = playerY
+    camYawRad = normalizeAngleRad(playerYawRad + PI.toFloat())
+    camPitchRad = 0.24f
+  }
+
+  @Synchronized
+  fun cycleWeatherMode() {
+    val modes = WeatherMode.entries
+    livingWorld.weatherMode = modes[(livingWorld.weatherMode.ordinal + 1) % modes.size]
+    showBanner("WEATHER · ${livingWorld.weatherMode.label}")
+  }
+
+  @Synchronized
+  fun setWeatherMode(mode: WeatherMode) {
+    livingWorld.weatherMode = mode
+    showBanner("WEATHER · ${mode.label}")
+  }
+
+  @Synchronized
+  fun toggleAutoWeather() {
+    livingWorld.autoWeatherCycle = !livingWorld.autoWeatherCycle
+    showBanner(if (livingWorld.autoWeatherCycle) "LIVE AUTO WEATHER ON" else "MANUAL WEATHER")
+  }
+
+  @Synchronized
+  fun buyMarketSnack(): Boolean {
+    val stall = livingWorld.nearestMarketStall(playerX, playerZ) ?: return false
+    if (playerCash < 25) {
+      showBanner("NEED $25 FOR ${stall.kind.label}")
+      return false
+    }
+    playerCash -= 25
+    playerHealth = min(100f, playerHealth + 35f)
+    val item = stall.kind.itemNames.firstOrNull() ?: "Produce"
+    onCombatSfx?.invoke(CombatSfxEvent.CASH)
+    showBanner("BOUGHT $item · +35 HP")
+    return true
+  }
+
+  @Synchronized
+  fun computeAmbientAudioSnapshot(): AmbientAudioSnapshot =
+    livingWorld.computeAmbientAudioSnapshot(
+      playerX = playerX,
+      playerZ = playerZ,
+      vehicles = vehicles,
+      isPlaying = isPlaying && !isPaused && !isPlayerEliminated,
+    )
 
   @Synchronized
   fun resetToSpawn() {
@@ -3359,9 +4094,13 @@ class GameSimulation(val world: WorldData) {
     ejectedNpcs.clear()
     bulletProjectiles.clear()
     hitSparks.clear()
+    glooWalls.clear()
+    playerReserveGlooWalls = 2
     isSwimming = false
     isSitting = false
     isScoped = false
+    input.sprintHeld = false
+    input.autoSprint = false
     sitProgress = 0f
     activeAttackMove = null
     attackTimerSec = 0f
@@ -3376,10 +4115,10 @@ class GameSimulation(val world: WorldData) {
     camLandingDipY = 0f
     camImpactShake = 0f
     playerX = world.playerSpawnX
-    playerY = 0f
+    playerY = computeGroundHeight(world.playerSpawnX, world.playerSpawnZ, 0f)
     playerZ = world.playerSpawnZ
-    airPeakY = 0f
-    airStartY = 0f
+    airPeakY = playerY
+    airStartY = playerY
     playerYawRad = world.playerSpawnYaw
     camYawRad = normalizeAngleRad(playerYawRad + PI.toFloat())
     camPitchRad = 0.28f
@@ -3387,8 +4126,10 @@ class GameSimulation(val world: WorldData) {
       val sp = world.vehicleSpawns[idx]
       v.x = sp.x
       v.z = sp.z
+      v.y = TerrainHeightfield.elevationAt(sp.x, sp.z).coerceAtLeast(0f)
       v.yawRad = sp.yawRad
       v.isAiTraffic = sp.isAiTraffic
+      v.driverBotId = null
       v.waypointIndex = sp.loopRouteIndex
       v.forwardSpeed = 0f
       v.lateralSpeed = 0f
@@ -3404,11 +4145,20 @@ class GameSimulation(val world: WorldData) {
       b.lateralSpeed = 0f
       b.wakeIntensity = 0f
     }
+    isBagOpen = false
+    bagItems.clear()
+    playerVestLevel = 0
+    playerVestDurability = 0f
+    playerHelmetLevel = 0
+    playerHelmetDurability = 0f
+    nearbyLootLabel = null
+    recomputeOwnedWeaponsFromPurchasedAndBag()
+    populateHouseLoot()
     pedestrians.forEachIndexed { idx, p ->
       val sp = world.pedestrianSpawns[idx]
       p.x = sp.waypoints.first().first
       p.z = sp.waypoints.first().second
-      p.y = 0f
+      p.y = computeGroundHeight(p.x, p.z, 0f)
       p.hp = p.maxHp
       p.isFriend = false
       p.sitProgress = 0f
@@ -3421,7 +4171,441 @@ class GameSimulation(val world: WorldData) {
       p.attackMove = null
       p.vx = 0f
       p.vz = 0f
+      p.drivingVehicleId = null
+      p.healTimerSec = 0f
+      p.glooWallCooldownSec = 0f
+      p.coverTimerSec = 0f
+      p.targetEnemyBotId = null
+      p.targetPlayer = false
+      p.targetLootUid = null
+      p.botMedkits = if (sp.isRivalFighter) 2 else 0
+      p.botGlooWalls = if (sp.isRivalFighter) 2 else 1
+      p.botBagCount = if (sp.isRivalFighter) 3 else 0
+      p.botMode = BotTacticalMode.ROAMING
+      p.weapon = sp.rivalWeapon
+      p.vestLevel = sp.vestLevel
+      p.vestDurability =
+        when (sp.vestLevel) {
+          4 -> LootItemKind.VEST_LV4.maxDurability
+          3 -> LootItemKind.VEST_LV3.maxDurability
+          else -> 0f
+        }
+      p.helmetLevel = sp.helmetLevel
+      p.helmetDurability =
+        when (sp.helmetLevel) {
+          4 -> LootItemKind.HELMET_LV4.maxDurability
+          3 -> LootItemKind.HELMET_LV3.maxDurability
+          else -> 0f
+        }
     }
+  }
+
+  private fun resetRivalFightersForMatch() {
+    pedestrians.forEachIndexed { idx, p ->
+      val sp = world.pedestrianSpawns[idx]
+      if (p.isRivalFighter) {
+        p.x = sp.waypoints.first().first
+        p.z = sp.waypoints.first().second
+        p.y = 0f
+        p.hp = p.maxHp
+        p.reactionState = NpcReactionState.STROLLING
+        p.fallProgress = 0f
+        p.armsUpNorm = 0f
+        p.sitProgress = 0f
+        p.attackMove = null
+        p.isHostileTarget = false
+        p.drivingVehicleId = null
+        p.healTimerSec = 0f
+        p.glooWallCooldownSec = 0f
+        p.coverTimerSec = 0f
+        p.targetEnemyBotId = null
+        p.targetPlayer = false
+        p.targetLootUid = null
+        p.botMedkits = 2
+        p.botGlooWalls = 2
+        p.botBagCount = 3
+        p.botMode = BotTacticalMode.ROAMING
+        p.weapon = sp.rivalWeapon
+        p.vestLevel = sp.vestLevel
+        p.vestDurability =
+          when (sp.vestLevel) {
+            4 -> LootItemKind.VEST_LV4.maxDurability
+            3 -> LootItemKind.VEST_LV3.maxDurability
+            else -> 0f
+          }
+        p.helmetLevel = sp.helmetLevel
+        p.helmetDurability =
+          when (sp.helmetLevel) {
+            4 -> LootItemKind.HELMET_LV4.maxDurability
+            3 -> LootItemKind.HELMET_LV3.maxDurability
+            else -> 0f
+          }
+      }
+    }
+  }
+
+  private fun populateHouseLoot() {
+    worldLootItems.clear()
+    val gunCycle =
+      listOf(
+        LootItemKind.PISTOL_9MM,
+        LootItemKind.SMG_MICRO,
+        LootItemKind.SHOTGUN,
+        LootItemKind.ASSAULT_RIFLE,
+        LootItemKind.SNIPER_RIFLE,
+      )
+    val vestCycle = listOf(LootItemKind.VEST_LV3, LootItemKind.VEST_LV4)
+    val helmCycle = listOf(LootItemKind.HELMET_LV3, LootItemKind.HELMET_LV4)
+
+    world.houses.forEachIndexed { idx, h ->
+      val cx = h.centerX
+      val cz = h.centerZ
+      // 1F interior open spots clear of central sofa/table/stairs
+      spawnLootSafely(gunCycle[idx % gunCycle.size], cx + 0.1f, cz + 1.8f, 0.4f, h.id)
+      spawnLootSafely(LootItemKind.MEDKIT, cx + 0.2f, cz - 2.1f, 0.4f, h.id)
+      spawnLootSafely(LootItemKind.COIN, cx - 0.1f, cz + 0.2f, 0.4f, h.id)
+      spawnLootSafely(LootItemKind.GLOO_WALL, cx - 2.2f, cz - 1.9f, 0.4f, h.id)
+      spawnLootSafely(vestCycle[idx % vestCycle.size], cx + 2.4f, cz - 2.2f, 0.4f, h.id)
+      spawnLootSafely(helmCycle[(idx + 1) % helmCycle.size], cx + 2.4f, cz + 2.1f, 0.4f, h.id)
+
+      // 2F & Rooftop premium loot for multi-story houses
+      if (h.floors >= 2) {
+        val rareGun = if (idx % 2 == 0) LootItemKind.ASSAULT_RIFLE else LootItemKind.SNIPER_RIFLE
+        spawnLootSafely(rareGun, cx - 0.8f, cz - 2.4f, 3.8f, h.id)
+        spawnLootSafely(LootItemKind.VEST_LV4, cx - 1.2f, cz + 2.2f, 3.8f, h.id)
+        spawnLootSafely(LootItemKind.COIN, cx - 2.8f, cz + 1.8f, 3.8f, h.id)
+        if (h.hasRooftop) {
+          spawnLootSafely(LootItemKind.HELMET_LV4, cx + 1.4f, cz + 0.4f, 7.2f, h.id)
+          spawnLootSafely(LootItemKind.MEDKIT, cx + 1.4f, cz - 1.4f, 7.2f, h.id)
+        }
+      }
+    }
+  }
+
+  private fun spawnLootSafely(
+    kind: LootItemKind,
+    desiredX: Float,
+    desiredZ: Float,
+    targetCurY: Float,
+    houseId: String?,
+  ) {
+    val candidates =
+      listOf(
+        Pair(desiredX, desiredZ),
+        Pair(desiredX + 0.9f, desiredZ),
+        Pair(desiredX - 0.9f, desiredZ),
+        Pair(desiredX, desiredZ + 0.9f),
+        Pair(desiredX, desiredZ - 0.9f),
+      )
+    var finalX = desiredX
+    var finalZ = desiredZ
+    for ((px, pz) in candidates) {
+      val elev = computeGroundHeight(px, pz, targetCurY)
+      if (!isPointBlockedBySolidAabb(px, pz, elev + 0.25f, elev + 1.45f, 0.36f)) {
+        finalX = px
+        finalZ = pz
+        break
+      }
+    }
+    val elev = computeGroundHeight(finalX, finalZ, targetCurY)
+    worldLootItems +=
+      WorldLootItem(
+        uid = "loot_${++lootUidSeq}",
+        kind = kind,
+        x = finalX,
+        y = elev,
+        z = finalZ,
+        houseId = houseId,
+      )
+  }
+
+  private fun dropRivalLoot(ped: PedestrianRuntimeState) {
+    spawnLootSafely(LootItemKind.COIN, ped.x - 0.6f, ped.z + 0.4f, ped.y + 0.5f, null)
+    spawnLootSafely(LootItemKind.MEDKIT, ped.x + 0.6f, ped.z - 0.4f, ped.y + 0.5f, null)
+    if (ped.botGlooWalls > 0) {
+      spawnLootSafely(LootItemKind.GLOO_WALL, ped.x - 0.5f, ped.z - 0.5f, ped.y + 0.5f, null)
+    }
+    val weaponLoot = LootItemKind.entries.firstOrNull { it.weapon == ped.weapon }
+    if (weaponLoot != null) {
+      spawnLootSafely(weaponLoot, ped.x, ped.z + 0.8f, ped.y + 0.5f, null)
+    }
+  }
+
+  private fun stepWorldLootAutoPickup(dt: Float) {
+    if (bagFullBannerCooldownSec > 0f) {
+      bagFullBannerCooldownSec = max(0f, bagFullBannerCooldownSec - dt)
+    }
+    var nearLabel: String? = null
+    val iter = worldLootItems.iterator()
+    while (iter.hasNext()) {
+      val item = iter.next()
+      if (item.pickupCooldownSec > 0f) {
+        item.pickupCooldownSec = max(0f, item.pickupCooldownSec - dt)
+      }
+      val dist = CollisionSolver.distXZ(playerX, playerZ, item.x, item.z)
+      if (abs(item.y - playerY) > 1.55f) continue
+
+      if (dist <= 1.35f && item.pickupCooldownSec <= 0f) {
+        when (item.kind.category) {
+          LootCategory.CURRENCY -> {
+            playerCash += item.kind.coinValue
+            hitSparks += HitSparkState(item.x, item.y + 0.45f, item.z, floatArrayOf(1.0f, 0.85f, 0.22f))
+            onCombatSfx?.invoke(CombatSfxEvent.CASH)
+            showBanner("+$${item.kind.coinValue} COIN PICKED UP")
+            iter.remove()
+            continue
+          }
+          LootCategory.VEST -> {
+            val lvl = item.kind.armorLevel
+            val maxDur = item.kind.maxDurability
+            if (lvl > playerVestLevel || (lvl == playerVestLevel && playerVestDurability < maxDur * 0.85f)) {
+              playerVestLevel = lvl
+              playerVestDurability = maxDur
+              hitSparks += HitSparkState(item.x, item.y + 0.55f, item.z, floatArrayOf(0.24f, 0.90f, 1.0f))
+              onCombatSfx?.invoke(CombatSfxEvent.FRIEND)
+              showBanner("AUTO-EQUIPPED ${item.kind.displayName}")
+              iter.remove()
+              continue
+            } else if (bagItems.size < MAX_BAG_SLOTS) {
+              bagItems.add(BagItem("bag_${++lootUidSeq}", item.kind, maxDur))
+              onCombatSfx?.invoke(CombatSfxEvent.CASH)
+              showBanner("LOOTED ${item.kind.displayName} (${bagItems.size}/$MAX_BAG_SLOTS)")
+              iter.remove()
+              continue
+            }
+          }
+          LootCategory.HELMET -> {
+            val lvl = item.kind.armorLevel
+            val maxDur = item.kind.maxDurability
+            if (lvl > playerHelmetLevel || (lvl == playerHelmetLevel && playerHelmetDurability < maxDur * 0.85f)) {
+              playerHelmetLevel = lvl
+              playerHelmetDurability = maxDur
+              hitSparks += HitSparkState(item.x, item.y + 0.55f, item.z, floatArrayOf(1.0f, 0.80f, 0.24f))
+              onCombatSfx?.invoke(CombatSfxEvent.FRIEND)
+              showBanner("AUTO-EQUIPPED ${item.kind.displayName}")
+              iter.remove()
+              continue
+            } else if (bagItems.size < MAX_BAG_SLOTS) {
+              bagItems.add(BagItem("bag_${++lootUidSeq}", item.kind, maxDur))
+              onCombatSfx?.invoke(CombatSfxEvent.CASH)
+              showBanner("LOOTED ${item.kind.displayName} (${bagItems.size}/$MAX_BAG_SLOTS)")
+              iter.remove()
+              continue
+            }
+          }
+          LootCategory.MEDICAL -> {
+            if (bagItems.size < MAX_BAG_SLOTS) {
+              bagItems.add(BagItem("bag_${++lootUidSeq}", item.kind))
+              onCombatSfx?.invoke(CombatSfxEvent.FRIEND)
+              showBanner("AUTO-LOOT: MEDKIT (${bagItems.size}/$MAX_BAG_SLOTS)")
+              iter.remove()
+              continue
+            }
+          }
+          LootCategory.GLOO_WALL -> {
+            if (bagItems.size < MAX_BAG_SLOTS) {
+              bagItems.add(BagItem("bag_${++lootUidSeq}", item.kind))
+              onCombatSfx?.invoke(CombatSfxEvent.CLIMB)
+              showBanner("AUTO-LOOT: GLOO WALL (${bagItems.size}/$MAX_BAG_SLOTS)")
+              iter.remove()
+              continue
+            }
+          }
+          LootCategory.WEAPON -> {
+            val weapon = item.kind.weapon
+            if (bagItems.size < MAX_BAG_SLOTS && weapon != null) {
+              bagItems.add(BagItem("bag_${++lootUidSeq}", item.kind))
+              ownedWeapons += weapon
+              if (equippedWeapon == WeaponType.FISTS) {
+                equippedWeapon = weapon
+              }
+              hitSparks += HitSparkState(item.x, item.y + 0.45f, item.z, floatArrayOf(0.28f, 0.92f, 0.72f))
+              onCombatSfx?.invoke(CombatSfxEvent.CASH)
+              showBanner("AUTO-LOOT: ${weapon.displayName} (${bagItems.size}/$MAX_BAG_SLOTS)")
+              iter.remove()
+              continue
+            }
+          }
+        }
+        // Bag is full -> alert player cleanly without spamming
+        nearLabel = "BAG FULL · OPEN BAG TO REMOVE (${item.kind.shortLabel})"
+        if (bagFullBannerCooldownSec <= 0f) {
+          bagFullBannerCooldownSec = 2.4f
+          showBanner("BAG FULL ($MAX_BAG_SLOTS/$MAX_BAG_SLOTS) · REMOVE ITEM")
+        }
+      } else if (dist <= 2.2f && item.pickupCooldownSec <= 0f) {
+        nearLabel =
+          if (bagItems.size >= MAX_BAG_SLOTS && item.kind.category != LootCategory.CURRENCY) {
+            "BAG FULL · REMOVE ITEM FOR ${item.kind.shortLabel}"
+          } else {
+            "AUTO-PICKUP: ${item.kind.displayName}"
+          }
+      }
+    }
+    nearbyLootLabel = nearLabel
+  }
+
+  internal fun rivalDisplayName(ped: PedestrianRuntimeState): String {
+    if (!ped.isRivalFighter) {
+      return if (ped.isBraveDefender) "BAYSIDE GUARD" else "BOT ${ped.id.takeLast(4).uppercase()}"
+    }
+    return when {
+      ped.id.contains("1") -> "RIVAL VIPER"
+      ped.id.contains("2") -> "RIVAL KOBRA"
+      ped.id.contains("3") -> "RIVAL STRIKER"
+      ped.id.contains("4") -> "RIVAL DRAKE"
+      ped.id.contains("5") -> "RIVAL PHANTOM"
+      ped.id.contains("market") -> "BAZAAR RAIDER"
+      ped.id.contains("bazaar") -> "BAZAAR GHOST"
+      ped.id.contains("sierra") -> "SIERRA HAWK"
+      ped.id.contains("emerald") -> "EMERALD TITAN"
+      ped.id.contains("canyon") -> "CANYON RANGER"
+      ped.id.contains("atoll") -> "ATOLL CORSAIR"
+      else -> "RIVAL ${ped.id.takeLast(2).uppercase()}"
+    }
+  }
+
+  private fun ensureLiveSpectatedTarget() {
+    val current = pedestrians.firstOrNull { it.id == spectatedKillerPedId && it.reactionState != NpcReactionState.KNOCKED_DOWN }
+    if (current != null) return
+    val fallback =
+      pedestrians
+        .filter { it.isRivalFighter && it.reactionState != NpcReactionState.KNOCKED_DOWN && !it.isFriend }
+        .minByOrNull { CollisionSolver.distXZ(playerX, playerZ, it.x, it.z) }
+        ?: pedestrians
+          .filter { it.reactionState != NpcReactionState.KNOCKED_DOWN && !it.isFriend }
+          .minByOrNull { CollisionSolver.distXZ(playerX, playerZ, it.x, it.z) }
+    spectatedKillerPedId = fallback?.id
+  }
+
+  private fun awardMatchCoinsIfNeeded(isEliminated: Boolean) {
+    if (matchCoinsAwarded) return
+    matchCoinsAwarded = true
+    val kos = (npcDefeatedCount - matchStartKoCount).coerceAtLeast(0)
+    val survivalBonus = (matchElapsedSec * 3.0f).toInt().coerceIn(if (isEliminated) 60 else 40, 260)
+    val baseFinish = if (isEliminated) 110 else 75
+    val totalReward = baseFinish + survivalBonus + (kos * 85)
+    playerCash += totalReward
+    lastMatchCoinsEarned = totalReward
+    onEconomyChanged?.invoke()
+  }
+
+  private fun triggerPlayerElimination() {
+    if (isPlayerEliminated) return
+    playerHealth = 0f
+    isPlayerEliminated = true
+    isSpectatingKiller = false
+    isScoped = false
+    input.autoSprint = false
+    isPaused = false
+    isBagOpen = false
+    isGunShopOpen = false
+    isStyleShopOpen = false
+    activeAttackMove = null
+    activeCarjack = null
+    activeParkour = null
+    playerFallProgress = 0.08f
+    wantedLevel = 0
+
+    val directKiller =
+      lastAttackerPedId?.let { id ->
+        pedestrians.firstOrNull { it.id == id && it.reactionState != NpcReactionState.KNOCKED_DOWN }
+      }
+    val resolvedKiller =
+      directKiller
+        ?: pedestrians
+          .filter { it.isRivalFighter && it.reactionState != NpcReactionState.KNOCKED_DOWN && !it.isFriend }
+          .minByOrNull { CollisionSolver.distXZ(playerX, playerZ, it.x, it.z) }
+        ?: pedestrians
+          .filter { it.reactionState != NpcReactionState.KNOCKED_DOWN && !it.isFriend }
+          .minByOrNull { CollisionSolver.distXZ(playerX, playerZ, it.x, it.z) }
+
+    spectatedKillerPedId = resolvedKiller?.id
+    eliminatedByName = lastAttackerName ?: resolvedKiller?.let { rivalDisplayName(it) } ?: "RIVAL FIGHTER"
+    eliminatedByWeapon = if (lastAttackerName != null) lastAttackerWeapon else (resolvedKiller?.weapon ?: WeaponType.FISTS)
+
+    awardMatchCoinsIfNeeded(isEliminated = true)
+    onCombatSfx?.invoke(CombatSfxEvent.KICK)
+    showBanner("ELIMINATED BY $eliminatedByName · +$lastMatchCoinsEarned COINS")
+  }
+
+  internal fun applyIncomingDamageToPlayer(
+    rawDamage: Float,
+    hitZone: HitZone,
+    attackerId: String? = null,
+    attackerName: String? = null,
+    attackerWeapon: WeaponType = WeaponType.FISTS,
+  ) {
+    if (isPlayerEliminated) return
+    if (attackerName != null) {
+      lastAttackerPedId = attackerId
+      lastAttackerName = attackerName
+      lastAttackerWeapon = attackerWeapon
+      lastAttackerTimerSec = 12f
+    }
+    var finalDmg = rawDamage
+    if (hitZone == HitZone.HEAD && playerHelmetLevel >= 3 && playerHelmetDurability > 0f) {
+      val absorb = if (playerHelmetLevel >= 4) 0.55f else 0.40f
+      finalDmg = rawDamage * (1f - absorb)
+      playerHelmetDurability = max(0f, playerHelmetDurability - rawDamage * 0.55f)
+      if (playerHelmetDurability <= 0f) {
+        playerHelmetLevel = 0
+        showBanner("HELMET DESTROYED!")
+      }
+    } else if (playerVestLevel >= 3 && playerVestDurability > 0f) {
+      val absorb = if (playerVestLevel >= 4) 0.58f else 0.42f
+      finalDmg = rawDamage * (1f - absorb)
+      playerVestDurability = max(0f, playerVestDurability - rawDamage * 0.60f)
+      if (playerVestDurability <= 0f) {
+        playerVestLevel = 0
+        showBanner("VEST DESTROYED!")
+      }
+    }
+    playerHealth = max(0f, playerHealth - finalDmg)
+    regenCooldownSec = 5.0f
+  }
+
+  internal fun hasLineOfSight(
+    x1: Float,
+    y1: Float,
+    z1: Float,
+    x2: Float,
+    y2: Float,
+    z2: Float,
+  ): Boolean {
+    val dx = x2 - x1
+    val dz = z2 - z1
+    val distXZ = hypot(dx, dz).coerceAtLeast(1e-4f)
+    val rdx = dx / distXZ
+    val rdz = dz / distXZ
+    val midY = (y1 + y2) * 0.5f
+    for (box in world.aabbColliders) {
+      if (box.tag.contains("Sofa") || box.tag.contains("Table") || box.tag.contains("Bench")) continue
+      val t = intersectRayAabbXZ(x1, z1, rdx, rdz, box.minX, box.minZ, box.maxX, box.maxZ)
+      if (t != null && t in 0.1f..distXZ && midY in box.minY..box.maxY) {
+        return false
+      }
+    }
+    for (wall in glooWalls) {
+      if (wall.hp <= 0f) continue
+      if (midY !in wall.y..(wall.y + 2.3f)) continue
+      if (intersectSegmentGlooWall(x1, z1, x2, z2, wall) != null) {
+        return false
+      }
+    }
+    // Check terrain ridges / hills blocking direct line of sight
+    if (distXZ > 6f) {
+      for (i in 1..4) {
+        val t = i / 5f
+        val sx = x1 + dx * t
+        val sz = z1 + dz * t
+        val sy = y1 + (y2 - y1) * t
+        if (TerrainHeightfield.elevationAt(sx, sz) > sy + 0.30f) {
+          return false
+        }
+      }
+    }
+    return true
   }
 
   @Synchronized
@@ -3440,8 +4624,22 @@ class GameSimulation(val world: WorldData) {
         else -> 0f
       }
     val kmh = (speedMs * 3.6f).toInt()
-    val inGreenValley = playerX >= 84f
-    val inRooftopTown = playerX <= -84f
+    val nexteraDistrict =
+      when {
+        hypot(playerX + 18f, playerZ + 180f) < 76f -> "INTELLECT CENTER"
+        hypot(playerX + 218f, playerZ - 6f) < 44f -> "TURBINE"
+        hypot(playerX + 178f, playerZ + 80f) < 52f -> "MUSEUM"
+        hypot(playerX + 158f, playerZ - 168f) < 58f -> "GRAV LABS"
+        hypot(playerX + 66f, playerZ - 152f) < 42f -> "PLAZARIA"
+        hypot(playerX - 24f, playerZ - 172f) < 48f -> "DECA SQUARE"
+        hypot(playerX - 154f, playerZ - 148f) < 48f -> "MUD SITE"
+        hypot(playerX - 76f, playerZ - 14f) < 44f -> "ZIPWAY"
+        hypot(playerX - 188f, playerZ - 22f) < 56f -> "RUST TOWN"
+        hypot(playerX - 172f, playerZ + 68f) < 48f -> "MORTAR RUINS"
+        hypot(playerX - 116f, playerZ + 148f) < 44f -> "TWIN BRIDGE"
+        hypot(playerX + 72f, playerZ - 6f) < 62f -> "FARMTOPIA"
+        else -> "NEXTERA ISLAND"
+      }
 
     val zone =
       when {
@@ -3450,20 +4648,11 @@ class GameSimulation(val world: WorldData) {
         dropPhase == DropPhase.PARACHUTE -> "PARACHUTE GLIDE"
         carjack != null -> "CARJACKING ${carjack.targetName.uppercase()}"
         isScoped -> "SCOPE ZOOM · ${equippedWeapon.displayName}"
-        boat != null ->
-          when {
-            inGreenValley -> "GREEN VALLEY OCEAN"
-            inRooftopTown -> "WEST HARBOR SEA"
-            else -> "BAYSIDE OPEN OCEAN"
-          }
-        isSwimming ->
-          when {
-            inGreenValley -> "SWIMMING OFF GREEN VALLEY"
-            inRooftopTown -> "SWIMMING OFF WEST TOWN"
-            else -> "SWIMMING IN BAYSIDE SEA"
-          }
+        boat != null -> "$nexteraDistrict WATERS"
+        isSwimming -> "SWIMMING · $nexteraDistrict"
         isSitting -> "SITTING · CHILL MODE"
         nearbyGunShop -> "VICE ARMS · GUN SHOP"
+        nearbyMarketStallLabel != null -> "FARMTOPIA · ${nearbyMarketStallLabel!!.uppercase()}"
         currentInsideHouse != null -> {
           val floorTag =
             when {
@@ -3474,19 +4663,11 @@ class GameSimulation(val world: WorldData) {
           "INSIDE ${currentInsideHouse!!.name.uppercase()}$floorTag"
         }
         CollisionSolver.isOnBridge(playerX, playerZ) ->
-          if (playerX < 0f) "WEST TOWN BRIDGE" else "GREEN VALLEY BRIDGE"
-        CollisionSolver.isOnPierOrDock(playerX, playerZ) ->
-          if (inGreenValley) "VALLEY BOAT PIER" else "MARINA BOAT PIER"
-        inRooftopTown && playerZ > 51f -> "WEST TOWN BEACH"
-        inRooftopTown && abs(playerX + 148f) < 9f -> "ROOFTOP TOWN STREET"
-        inRooftopTown -> "ROOFTOP TOWN"
-        inGreenValley && playerZ > 51f -> "VALLEY PALM BEACH"
-        inGreenValley && abs(playerX - 148f) < 15f && playerZ in -18f..10f -> "GREEN VALLEY PARK"
-        inGreenValley -> "GREEN VALLEY ENCLAVE"
-        playerZ > 51f -> "BAYSIDE SUNSET BEACH"
-        abs(playerX) < 10f && playerZ in -12f..4f -> "BAYSIDE CENTRAL PLAZA"
-        abs(playerZ - 16f) < 6f || abs(playerZ + 24f) < 6f -> "SUNSET BOULEVARD"
-        else -> "KEY BAYSIDE"
+          if (playerX < -140f && playerZ in -42f..50f) "TURBINE RED BRIDGE" else "INTELLECT MOAT BRIDGE"
+        CollisionSolver.isOnPierOrDock(playerX, playerZ) -> "GRAV LABS MARINA PIER"
+        CollisionSolver.distXZ(playerX, playerZ, -48f, -118f) < 22f -> "INTELLECT MOAT FALLS"
+        CollisionSolver.distXZ(playerX, playerZ, -196f, -12f) < 20f -> "TURBINE COVE FALLS"
+        else -> nexteraDistrict
       }
 
     val panicCount =
@@ -3495,6 +4676,26 @@ class GameSimulation(val world: WorldData) {
       }
     val friends = pedestrians.filter { it.isFriend }
     val groundElev = computeGroundHeight(playerX, playerZ, playerY)
+
+    val vestMax =
+      when (playerVestLevel) {
+        4 -> LootItemKind.VEST_LV4.maxDurability.toInt()
+        3 -> LootItemKind.VEST_LV3.maxDurability.toInt()
+        else -> 0
+      }
+    val helmMax =
+      when (playerHelmetLevel) {
+        4 -> LootItemKind.HELMET_LV4.maxDurability.toInt()
+        3 -> LootItemKind.HELMET_LV3.maxDurability.toInt()
+        else -> 0
+      }
+
+    val spectatedPed =
+      if (isPlayerEliminated && isSpectatingKiller) {
+        pedestrians.firstOrNull { it.id == spectatedKillerPedId }
+      } else {
+        null
+      }
 
     return HudSnapshot(
       isPlaying = isPlaying,
@@ -3537,11 +4738,12 @@ class GameSimulation(val world: WorldData) {
       playerYawRad = playerYawRad,
       cameraYawRad = camYawRad,
       speedKmh = kmh,
-      isSprinting = car == null && boat == null && input.sprintHeld && playerSpeedNorm > 0.6f,
+      isSprinting = car == null && boat == null && (input.sprintHeld || input.autoSprint) && playerSpeedNorm > 0.6f,
+      isAutoSprinting = car == null && boat == null && input.autoSprint,
       isDrifting = car?.isDrifting == true,
       activeVehicleName = boat?.displayName ?: car?.displayName,
       nearbyVehicleName = nearbyVehicle?.displayName,
-      nearbyVehicleOccupied = nearbyVehicle?.isAiTraffic == true,
+      nearbyVehicleOccupied = nearbyVehicle?.isAiTraffic == true || nearbyVehicle?.driverBotId != null,
       nearbyBoatName = nearbyBoat?.displayName,
       nearbyBoatOccupied = nearbyBoat?.isAiCruise == true,
       insideHouseName = currentInsideHouse?.name,
@@ -3553,7 +4755,7 @@ class GameSimulation(val world: WorldData) {
       boatsMapPos = boats.map { Triple(it.id, it.x, it.z) },
       pedestriansMapPos =
         pedestrians
-          .filter { it.reactionState != NpcReactionState.KNOCKED_DOWN && !it.isFriend }
+          .filter { it.reactionState != NpcReactionState.KNOCKED_DOWN && !it.isFriend && !it.isRivalFighter }
           .map {
             Triple(
               it.x,
@@ -3563,7 +4765,166 @@ class GameSimulation(val world: WorldData) {
           },
       friendsMapPos = friends.map { Pair(it.x, it.z) },
       gunShopMapPos = world.gunShopCenter,
+      isBagOpen = isBagOpen,
+      bagItems = bagItems.toList(),
+      bagCapacity = MAX_BAG_SLOTS,
+      isBagFull = bagItems.size >= MAX_BAG_SLOTS,
+      medkitCount = bagItems.count { it.kind == LootItemKind.MEDKIT },
+      vestLevel = playerVestLevel,
+      vestDurability = playerVestDurability.toInt(),
+      vestMaxDurability = vestMax,
+      helmetLevel = playerHelmetLevel,
+      helmetDurability = playerHelmetDurability.toInt(),
+      helmetMaxDurability = helmMax,
+      nearbyLootLabel = nearbyLootLabel,
+      lootMapPos = worldLootItems.map { Triple(it.x, it.z, it.kind.category) },
+      rivalsMapPos =
+        pedestrians
+          .filter { (it.isRivalFighter || it.weapon != WeaponType.FISTS) && it.reactionState != NpcReactionState.KNOCKED_DOWN && !it.isFriend }
+          .map { Pair(it.x, it.z) },
+      isPlayerEliminated = isPlayerEliminated,
+      isSpectatingKiller = isSpectatingKiller,
+      eliminatedByName = eliminatedByName,
+      eliminatedByWeapon = eliminatedByWeapon,
+      spectatingTargetName = spectatedPed?.let { rivalDisplayName(it) } ?: eliminatedByName,
+      spectatingTargetHp = spectatedPed?.hp?.toInt() ?: 0,
+      spectatingTargetWeapon = spectatedPed?.weapon ?: eliminatedByWeapon,
+      lastMatchCoinsEarned = lastMatchCoinsEarned,
+      isStyleShopOpen = isStyleShopOpen,
+      equippedCloth = equippedCloth,
+      ownedCloths = ownedCloths.toSet(),
+      equippedHair = equippedHair,
+      ownedHairs = ownedHairs.toSet(),
+      equippedPants = equippedPants,
+      ownedPants = ownedPants.toSet(),
+      equippedGunSkin = equippedGunSkin,
+      ownedGunSkins = ownedGunSkins.toSet(),
+      equippedCarSkin = equippedCarSkin,
+      ownedCarSkins = ownedCarSkins.toSet(),
+      weatherMode = livingWorld.weatherMode,
+      autoWeatherCycle = livingWorld.autoWeatherCycle,
+      rainIntensity = livingWorld.rainIntensity,
+      lightningFlash = livingWorld.lightningFlash,
+      nearbyMarketStallLabel = nearbyMarketStallLabel,
+      marketBotSummary = null,
+      trainMapPos = if (world.railwayLoopWaypoints.size >= 2) Pair(livingWorld.trainState.x, livingWorld.trainState.z) else null,
+      helicoptersMapPos = livingWorld.helicopters.map { Pair(it.x, it.z) },
+      marketMapPos = world.marketCenter,
+      waterfallMapPos = world.waterfallCenter,
+      atollMapPos = world.atollCenter,
+      glooWallCount = playerReserveGlooWalls + bagItems.count { it.kind == LootItemKind.GLOO_WALL },
+      glooWallsMapPos = glooWalls.map { Pair(it.x, it.z) },
+      aliveBotsCount = pedestrians.count { !it.isFriend && it.reactionState != NpcReactionState.KNOCKED_DOWN },
     )
+  }
+
+  internal fun spawnGlooWallForBot(ped: PedestrianRuntimeState, threatX: Float, threatZ: Float): Boolean {
+    val dx = threatX - ped.x
+    val dz = threatZ - ped.z
+    val dist = hypot(dx, dz).coerceAtLeast(0.1f)
+    val yaw = angleBetweenXZ(dx, dz)
+    val wallX = ped.x + (dx / dist) * 2.05f
+    val wallZ = ped.z + (dz / dist) * 2.05f
+    val wallY = computeGroundHeight(wallX, wallZ, ped.y)
+    glooWalls +=
+      GlooWallState(
+        id = "gloo_${++glooUidSeq}",
+        ownerId = ped.id,
+        x = wallX,
+        y = wallY,
+        z = wallZ,
+        yawRad = yaw,
+        isPlayerOwned = false,
+      )
+    hitSparks += HitSparkState(wallX, wallY + 1.0f, wallZ, floatArrayOf(0.24f, 0.90f, 1.0f), durationSec = 0.35f)
+    return true
+  }
+
+  private fun stepGlooWalls(dt: Float) {
+    val iter = glooWalls.iterator()
+    while (iter.hasNext()) {
+      val wall = iter.next()
+      wall.ageSec += dt
+      if (wall.ageSec >= wall.durationSec || wall.hp <= 0f) {
+        iter.remove()
+      }
+    }
+  }
+
+  private fun stepLootRespawn(dt: Float) {
+    lootRespawnTimerSec += dt
+    if (lootRespawnTimerSec < 22f) return
+    lootRespawnTimerSec = 0f
+    if (worldLootItems.size < 22) {
+      val h = world.houses[((worldTimeSec * 3f).toInt()) % world.houses.size]
+      spawnLootSafely(LootItemKind.MEDKIT, h.centerX + 0.2f, h.centerZ - 2.1f, 0.4f, h.id)
+      spawnLootSafely(LootItemKind.GLOO_WALL, h.centerX - 2.0f, h.centerZ - 1.8f, 0.4f, h.id)
+      spawnLootSafely(LootItemKind.ASSAULT_RIFLE, h.centerX + 0.1f, h.centerZ + 1.8f, 0.4f, h.id)
+    }
+  }
+
+  internal fun resolveEntityVsGlooWalls(x: Float, z: Float, radius: Float, entityY: Float): Pair<Float, Float> {
+    var rx = x
+    var rz = z
+    for (wall in glooWalls) {
+      if (wall.hp <= 0f) continue
+      if (entityY > wall.y + 2.15f) continue
+      val dx = rx - wall.x
+      val dz = rz - wall.z
+      val c = cos(wall.yawRad)
+      val s = sin(wall.yawRad)
+      val lx = dx * c - dz * s
+      val lz = dx * s + dz * c
+      val halfW = 1.65f
+      val halfT = 0.28f
+      val closestX = lx.coerceIn(-halfW, halfW)
+      val closestZ = lz.coerceIn(-halfT, halfT)
+      val px = lx - closestX
+      val pz = lz - closestZ
+      val dSq = px * px + pz * pz
+      if (dSq >= radius * radius) continue
+
+      var pushLx = 0f
+      var pushLz = 0f
+      if (dSq > 1e-6f) {
+        val d = sqrt(dSq)
+        val push = radius - d
+        pushLx = (px / d) * push
+        pushLz = (pz / d) * push
+      } else {
+        pushLz = if (lz >= 0f) (halfT - lz + radius) else -(halfT + lz + radius)
+      }
+      rx += pushLx * c + pushLz * s
+      rz += -pushLx * s + pushLz * c
+    }
+    return Pair(rx, rz)
+  }
+
+  private fun intersectSegmentGlooWall(
+    x1: Float,
+    z1: Float,
+    x2: Float,
+    z2: Float,
+    wall: GlooWallState,
+  ): Float? {
+    val c = cos(wall.yawRad)
+    val s = sin(wall.yawRad)
+    val dx1 = x1 - wall.x
+    val dz1 = z1 - wall.z
+    val lx1 = dx1 * c - dz1 * s
+    val lz1 = dx1 * s + dz1 * c
+
+    val dx2 = x2 - wall.x
+    val dz2 = z2 - wall.z
+    val lx2 = dx2 * c - dz2 * s
+    val lz2 = dx2 * s + dz2 * c
+
+    val vx = lx2 - lx1
+    val vz = lz2 - lz1
+    val segLen = hypot(vx, vz).coerceAtLeast(1e-5f)
+    val tHit = intersectRayAabbXZ(lx1, lz1, vx / segLen, vz / segLen, -1.68f, -0.32f, 1.68f, 0.32f) ?: return null
+    val frac = tHit / segLen
+    return if (frac in 0f..1f) frac else null
   }
 
   private fun intersectSegmentCircleXZ(
@@ -3646,6 +5007,8 @@ class GameSimulation(val world: WorldData) {
   }
 
   companion object {
+    const val MAX_BAG_SLOTS = 8
+
     val HERO_PRESETS: List<Pair<String, com.example.game.world.CharacterAppearance>> =
       listOf(
         "VICE HERO" to com.example.game.world.CartoonPresets.PLAYER_HERO,

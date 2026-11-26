@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -30,10 +31,13 @@ import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.EventSeat
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Landscape
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.ShoppingBasket
 import androidx.compose.material.icons.filled.SportsMma
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Thunderstorm
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material3.Button
@@ -42,6 +46,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,9 +59,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.game.state.HudSnapshot
 import com.example.game.state.TimeOfDayPreset
+import com.example.game.state.WeatherMode
 import com.example.game.world.HouseSpec
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.GoldenHour
@@ -128,8 +135,8 @@ fun TitleScreenOverlay(
             verticalArrangement = Arrangement.spacedBy(6.dp),
           ) {
             FeatureChip(Icons.Filled.FlightTakeoff, "Plane & Chute Drop", ElectricCyan)
-            FeatureChip(Icons.Filled.Home, "3 Maps · Rooftops", PalmMint)
-            FeatureChip(Icons.Filled.SportsMma, "Hand & Foot Fight", NeonPink)
+            FeatureChip(Icons.Filled.Home, "Nextera · 12 POIs", PalmMint)
+            FeatureChip(Icons.Filled.SportsMma, "BR Combat Bots", NeonPink)
             FeatureChip(Icons.Filled.Storefront, "Gun Shop", GoldenHour)
           }
           Spacer(modifier = Modifier.height(8.dp))
@@ -188,8 +195,8 @@ fun TitleScreenOverlay(
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           FeatureChip(Icons.Filled.FlightTakeoff, "Plane & Chute Drop", ElectricCyan)
-          FeatureChip(Icons.Filled.Home, "3 Maps · Rooftops", PalmMint)
-          FeatureChip(Icons.Filled.SportsMma, "Hand & Foot Fight", NeonPink)
+          FeatureChip(Icons.Filled.Home, "Nextera · 12 POIs", PalmMint)
+          FeatureChip(Icons.Filled.SportsMma, "BR Combat Bots", NeonPink)
           FeatureChip(Icons.Filled.Storefront, "Gun Shop", GoldenHour)
         }
 
@@ -249,6 +256,11 @@ fun PauseMapModal(
   onSummonCar: () -> Unit,
   onResetWorld: () -> Unit,
   onSelectTime: (TimeOfDayPreset) -> Unit,
+  onSelectWeather: (WeatherMode) -> Unit = {},
+  onToggleAutoWeather: () -> Unit = {},
+  onTeleportMarket: () -> Unit = {},
+  onTeleportWaterfall: () -> Unit = {},
+  onTeleportAtoll: () -> Unit = {},
   onCycleCamera: () -> Unit,
   onAirplaneDrop: () -> Unit,
   onReturnToLobby: () -> Unit = {},
@@ -260,40 +272,55 @@ fun PauseMapModal(
         .fillMaxSize()
         .background(ViceVoid.copy(alpha = 0.72f))
         .windowInsetsPadding(WindowInsets.safeDrawing)
-        .padding(16.dp),
+        .padding(10.dp),
     contentAlignment = Alignment.Center,
   ) {
+    val compactMobile = maxHeight <= 500.dp || maxWidth <= 950.dp
     val wideModal = maxWidth >= 560.dp
+    val cardPaddingV = if (compactMobile) 6.dp else 10.dp
+    val cardPaddingH = if (compactMobile) 10.dp else 14.dp
+    val btnHeight = if (compactMobile) 34.dp else 44.dp
+    val btnPad = if (compactMobile) PaddingValues(horizontal = 8.dp, vertical = 4.dp) else ButtonDefaults.ContentPadding
+
     Column(
       modifier =
-        Modifier.widthIn(max = if (wideModal) 680.dp else 520.dp)
-          .clip(RoundedCornerShape(24.dp))
+        Modifier.widthIn(max = if (wideModal) (if (compactMobile) 600.dp else 680.dp) else 460.dp)
+          .clip(RoundedCornerShape(if (compactMobile) 16.dp else 24.dp))
           .background(ViceSurfaceSolid)
-          .border(1.5.dp, ElectricCyan.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
+          .border(1.3.dp, ElectricCyan.copy(alpha = 0.5f), RoundedCornerShape(if (compactMobile) 16.dp else 24.dp))
           .verticalScroll(rememberScrollState())
-          .padding(18.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp),
+          .padding(if (compactMobile) 12.dp else 18.dp),
+      verticalArrangement = Arrangement.spacedBy(if (compactMobile) 8.dp else 12.dp),
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Column {
-          Text("VICE HORIZON WORLD MAP", style = MaterialTheme.typography.headlineMedium, color = TextPrimary)
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
           Text(
-            text = "Rooftop Town ↔ Key Bayside ↔ Green Valley · 3D Multi-Floor Maps",
-            style = MaterialTheme.typography.bodyMedium,
+            text = "NEXTERA WORLD MAP",
+            style = if (compactMobile) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineMedium,
+            color = TextPrimary,
+          )
+          Text(
+            text = "Intellect Center · Farmtopia · Turbine Red Bridge · Grav Labs · Deca Square · Rust Town",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = if (compactMobile) 9.5.sp else 12.sp),
             color = TextSecondary,
           )
         }
         Button(
           onClick = onResume,
           colors = ButtonDefaults.buttonColors(containerColor = NeonPink, contentColor = ViceVoid),
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.testTag("resume_button"),
+          shape = RoundedCornerShape(if (compactMobile) 9.dp else 12.dp),
+          contentPadding = btnPad,
+          modifier = Modifier.height(btnHeight).testTag("resume_button"),
         ) {
-          Text(stringResource(R.string.action_resume), fontWeight = FontWeight.Bold)
+          Text(
+            text = stringResource(R.string.action_resume),
+            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 10.sp else 12.sp),
+          )
         }
       }
 
@@ -388,11 +415,81 @@ fun PauseMapModal(
             )
             Spacer(modifier = Modifier.width(10.dp))
             Column {
-              Text("Marina Boat Pier", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
-              Text("2 Docked Speedboats · Open Ocean Sailing", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+              Text("Grav Labs Marina Pier", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+              Text("2 Docked Speedboats · SW Bay Sailing", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
             }
           }
           Text("SAIL", style = MaterialTheme.typography.labelLarge, color = PalmMint)
+        }
+
+        // Nextera POI Fast Travel Cards: Farmtopia Market, Intellect Falls, Turbine Bluff
+        Row(
+          modifier =
+            Modifier.fillMaxWidth()
+              .clip(RoundedCornerShape(14.dp))
+              .background(ViceVoid.copy(alpha = 0.6f))
+              .border(1.dp, PalmMint.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+              .clickable(onClick = onTeleportMarket)
+              .padding(horizontal = 14.dp, vertical = 10.dp)
+              .testTag("teleport_market"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.ShoppingBasket, contentDescription = "Farmtopia Produce Market", tint = PalmMint, modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+              Text("Farmtopia Produce Market", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+              Text("Central Harvest Stalls, Fresh Veg & Custom Gear", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+            }
+          }
+          Text("FARMTOPIA", style = MaterialTheme.typography.labelLarge, color = PalmMint)
+        }
+
+        Row(
+          modifier =
+            Modifier.fillMaxWidth()
+              .clip(RoundedCornerShape(14.dp))
+              .background(ViceVoid.copy(alpha = 0.6f))
+              .border(1.dp, ElectricCyan.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+              .clickable(onClick = onTeleportWaterfall)
+              .padding(horizontal = 14.dp, vertical = 10.dp)
+              .testTag("teleport_waterfall"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Landscape, contentDescription = "Intellect Moat and Falls", tint = ElectricCyan, modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+              Text("Intellect Moat & Falls", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+              Text("North Island Bridges, Citadel & Cascade Jharna", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+            }
+          }
+          Text("INTELLECT", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
+        }
+
+        Row(
+          modifier =
+            Modifier.fillMaxWidth()
+              .clip(RoundedCornerShape(14.dp))
+              .background(ViceVoid.copy(alpha = 0.6f))
+              .border(1.dp, GoldenHour.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+              .clickable(onClick = onTeleportAtoll)
+              .padding(horizontal = 14.dp, vertical = 10.dp)
+              .testTag("teleport_atoll"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.DirectionsBoat, contentDescription = "Turbine Bluff and Red Bridge", tint = GoldenHour, modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+              Text("Turbine Bluff & Red Bridge", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+              Text("West Headland Windmills, Cove & Suspension Bridge", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+            }
+          }
+          Text("TURBINE", style = MaterialTheme.typography.labelLarge, color = GoldenHour)
         }
       }
 
@@ -427,60 +524,117 @@ fun PauseMapModal(
         }
       }
 
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        OutlinedButton(
-          onClick = onSummonCar,
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.weight(1f).testTag("summon_car_button"),
-        ) {
-          Icon(Icons.Filled.DirectionsCar, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(18.dp))
-          Spacer(modifier = Modifier.width(5.dp))
-          Text("CAR", color = TextPrimary, style = MaterialTheme.typography.labelSmall)
+      Text("LIVE WEATHER", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+      FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        WeatherMode.entries.forEach { mode ->
+          val active = hud.weatherMode == mode
+          Box(
+            modifier =
+              Modifier.minimumInteractiveComponentSize()
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (active) ElectricCyan.copy(alpha = 0.25f) else ViceVoid)
+                .border(
+                  1.dp,
+                  if (active) ElectricCyan else Color.White.copy(alpha = 0.2f),
+                  RoundedCornerShape(12.dp),
+                )
+                .clickable { onSelectWeather(mode) }
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .testTag("weather_mode_${mode.name}")
+          ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Icon(
+                Icons.Filled.Thunderstorm,
+                contentDescription = mode.label,
+                tint = if (active) ElectricCyan else TextSecondary,
+                modifier = Modifier.size(16.dp),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(mode.label, style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+            }
+          }
         }
-        OutlinedButton(
-          onClick = onAirplaneDrop,
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.weight(1f).testTag("plane_redrop_button"),
+        Box(
+          modifier =
+            Modifier.minimumInteractiveComponentSize()
+              .clip(RoundedCornerShape(12.dp))
+              .background(if (hud.autoWeatherCycle) PalmMint.copy(alpha = 0.24f) else ViceVoid)
+              .border(
+                1.dp,
+                if (hud.autoWeatherCycle) PalmMint else Color.White.copy(alpha = 0.2f),
+                RoundedCornerShape(12.dp),
+              )
+              .clickable(onClick = onToggleAutoWeather)
+              .padding(horizontal = 12.dp, vertical = 8.dp)
+              .testTag("auto_weather_button")
         ) {
-          Icon(Icons.Filled.FlightTakeoff, contentDescription = null, tint = NeonPink, modifier = Modifier.size(18.dp))
-          Spacer(modifier = Modifier.width(5.dp))
-          Text("PLANE DROP", color = TextPrimary, style = MaterialTheme.typography.labelSmall)
-        }
-        OutlinedButton(
-          onClick = onCycleCamera,
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.weight(1f).testTag("cycle_camera_modal_button"),
-        ) {
-          Icon(Icons.Filled.Videocam, contentDescription = null, tint = GoldenHour, modifier = Modifier.size(18.dp))
-          Spacer(modifier = Modifier.width(5.dp))
-          Text(hud.cameraMode.label, color = TextPrimary, style = MaterialTheme.typography.labelSmall)
+          Text(
+            text = if (hud.autoWeatherCycle) "AUTO WEATHER: ON" else "AUTO WEATHER: OFF",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (hud.autoWeatherCycle) PalmMint else TextSecondary,
+          )
         }
       }
 
       Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(if (compactMobile) 6.dp else 8.dp),
+      ) {
+        OutlinedButton(
+          onClick = onSummonCar,
+          shape = RoundedCornerShape(if (compactMobile) 9.dp else 12.dp),
+          contentPadding = btnPad,
+          modifier = Modifier.weight(1f).height(btnHeight).testTag("summon_car_button"),
+        ) {
+          Icon(Icons.Filled.DirectionsCar, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(if (compactMobile) 14.dp else 18.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("CAR", color = TextPrimary, style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 9.5.sp else 11.sp))
+        }
+        OutlinedButton(
+          onClick = onAirplaneDrop,
+          shape = RoundedCornerShape(if (compactMobile) 9.dp else 12.dp),
+          contentPadding = btnPad,
+          modifier = Modifier.weight(1f).height(btnHeight).testTag("plane_redrop_button"),
+        ) {
+          Icon(Icons.Filled.FlightTakeoff, contentDescription = null, tint = NeonPink, modifier = Modifier.size(if (compactMobile) 14.dp else 18.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("PLANE DROP", color = TextPrimary, style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 9.5.sp else 11.sp))
+        }
+        OutlinedButton(
+          onClick = onCycleCamera,
+          shape = RoundedCornerShape(if (compactMobile) 9.dp else 12.dp),
+          contentPadding = btnPad,
+          modifier = Modifier.weight(1f).height(btnHeight).testTag("cycle_camera_modal_button"),
+        ) {
+          Icon(Icons.Filled.Videocam, contentDescription = null, tint = GoldenHour, modifier = Modifier.size(if (compactMobile) 14.dp else 18.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(hud.cameraMode.label, color = TextPrimary, style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 9.5.sp else 11.sp))
+        }
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(if (compactMobile) 6.dp else 8.dp),
       ) {
         OutlinedButton(
           onClick = onResetWorld,
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.weight(1f).testTag("reset_world_button"),
+          shape = RoundedCornerShape(if (compactMobile) 9.dp else 12.dp),
+          contentPadding = btnPad,
+          modifier = Modifier.weight(1f).height(btnHeight).testTag("reset_world_button"),
         ) {
-          Icon(Icons.Filled.Refresh, contentDescription = null, tint = NeonPink, modifier = Modifier.size(18.dp))
-          Spacer(modifier = Modifier.width(6.dp))
-          Text(stringResource(R.string.action_reset_pos), color = TextPrimary, style = MaterialTheme.typography.labelSmall)
+          Icon(Icons.Filled.Refresh, contentDescription = null, tint = NeonPink, modifier = Modifier.size(if (compactMobile) 14.dp else 18.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(stringResource(R.string.action_reset_pos), color = TextPrimary, style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 9.5.sp else 11.sp))
         }
         OutlinedButton(
           onClick = onReturnToLobby,
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.weight(1f).testTag("return_to_lobby_button"),
+          shape = RoundedCornerShape(if (compactMobile) 9.dp else 12.dp),
+          contentPadding = btnPad,
+          modifier = Modifier.weight(1f).height(btnHeight).testTag("return_to_lobby_button"),
         ) {
-          Icon(Icons.Filled.Home, contentDescription = null, tint = GoldenHour, modifier = Modifier.size(18.dp))
-          Spacer(modifier = Modifier.width(6.dp))
-          Text("BACK TO LOBBY", color = GoldenHour, style = MaterialTheme.typography.labelSmall)
+          Icon(Icons.Filled.Home, contentDescription = null, tint = GoldenHour, modifier = Modifier.size(if (compactMobile) 14.dp else 18.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("BACK TO LOBBY", color = GoldenHour, style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 9.5.sp else 11.sp))
         }
       }
     }

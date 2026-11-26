@@ -2,6 +2,9 @@ package com.example.game.world
 
 import com.example.game.math.AabbCollider
 import com.example.game.math.CircleCollider
+import com.example.game.state.MarketStallSpec
+import com.example.game.state.WaterfallSpec
+import com.example.game.state.WeaponType
 
 enum class MaterialSurface(val id: Int) {
   GRASS(0),
@@ -18,11 +21,14 @@ enum class MaterialSurface(val id: Int) {
   SLATE(11),
   SKIN(12),
   CLOTH(13),
+  TERRAIN(14),
 }
 
 enum class TreeKind {
   PALM,
   TROPICAL_SHADE,
+  PINE_CONIFER,
+  CYPRESS_ACACIA,
 }
 
 data class HouseSpec(
@@ -43,6 +49,55 @@ data class HouseSpec(
   val floors: Int = 1,
   val facingX: Int = 0, // 0 = use facingSouth (+/-Z); +1 = facing East (+X); -1 = facing West (-X)
   val hasRooftop: Boolean = false,
+)
+
+data class GabledRoofSpec(
+  val cx: Float,
+  val cy: Float,
+  val cz: Float,
+  val width: Float,
+  val height: Float,
+  val length: Float,
+  val yawDeg: Float = 0f,
+  val color: FloatArray,
+  val surface: MaterialSurface = MaterialSurface.WOOD,
+  val trimColor: FloatArray? = null,
+)
+
+data class BoulderSpec(
+  val x: Float,
+  val y: Float,
+  val z: Float,
+  val rx: Float,
+  val ry: Float,
+  val rz: Float,
+  val yawDeg: Float = 0f,
+  val pitchDeg: Float = 0f,
+  val color: FloatArray,
+)
+
+data class WindTurbineSpec(
+  val x: Float,
+  val y: Float,
+  val z: Float,
+  val towerHeight: Float,
+  val bladeRadius: Float,
+  val yawDeg: Float = 0f,
+  val accentColor: FloatArray = floatArrayOf(0.18f, 0.88f, 0.96f),
+)
+
+data class DomeSpec(
+  val cx: Float,
+  val cy: Float,
+  val cz: Float,
+  val radiusX: Float,
+  val height: Float,
+  val radiusZ: Float,
+  val color: FloatArray,
+  val surface: MaterialSurface = MaterialSurface.GLASS,
+  val metallic: Float = 0.65f,
+  val roughness: Float = 0.16f,
+  val alpha: Float = 0.78f,
 )
 
 enum class RampAxis {
@@ -163,6 +218,10 @@ data class PedestrianSpawnSpec(
   val speed: Float = 2.1f,
   val appearance: CharacterAppearance = CartoonPresets.LEAN_BUDDY_BLUE,
   val isBraveDefender: Boolean = false,
+  val isRivalFighter: Boolean = false,
+  val rivalWeapon: WeaponType = WeaponType.FISTS,
+  val vestLevel: Int = 0,
+  val helmetLevel: Int = 0,
 )
 
 data class WorldData(
@@ -187,4 +246,15 @@ data class WorldData(
   val playerSpawnYaw: Float,
   val gunShopCenter: Pair<Float, Float> = Pair(27.5f, -2.0f),
   val gunShopBuyPos: Pair<Float, Float> = Pair(27.5f, 3.2f),
+  val waterfalls: List<WaterfallSpec> = emptyList(),
+  val marketStalls: List<MarketStallSpec> = emptyList(),
+  val railwayLoopWaypoints: List<Pair<Float, Float>> = emptyList(),
+  val marketBotRoutes: List<List<Pair<Float, Float>>> = emptyList(),
+  val marketCenter: Pair<Float, Float> = Pair(266f, -2f),
+  val waterfallCenter: Pair<Float, Float> = Pair(-14f, -134f),
+  val atollCenter: Pair<Float, Float> = Pair(0f, 178f),
+  val gabledRoofs: List<GabledRoofSpec> = emptyList(),
+  val boulders: List<BoulderSpec> = emptyList(),
+  val windTurbines: List<WindTurbineSpec> = emptyList(),
+  val domes: List<DomeSpec> = emptyList(),
 )

@@ -1,6 +1,7 @@
 package com.example.ui.hud
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -29,25 +31,38 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Backpack
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MedicalServices
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MonetizationOn
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SportsMma
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Thunderstorm
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WbTwilight
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,15 +76,22 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
+import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.ViceSurfaceSolid
+import com.example.ui.theme.ViceVoid
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.game.ai.MultilingualAiAssistant
@@ -78,11 +100,15 @@ import com.example.game.gl.ViceGlRenderer
 import com.example.game.state.CameraDistanceMode
 import com.example.game.state.DropPhase
 import com.example.game.state.GameSimulation
+import com.example.game.state.HudElementId
+import com.example.game.state.HudLayoutConfig
+import com.example.game.state.HudLayoutStore
 import com.example.game.state.HudSnapshot
 import com.example.game.state.LandingReactionType
 import com.example.game.state.ParkourActionType
 import com.example.game.state.TimeOfDayPreset
 import com.example.game.state.WeaponType
+import com.example.game.state.WeatherMode
 import com.example.game.voice.VoiceChatManager
 import com.example.game.voice.VoiceWebViewHost
 import com.example.ui.theme.ElectricCyan
@@ -100,21 +126,32 @@ fun ViceHorizonScreen(
   hud: HudSnapshot,
   voiceManager: VoiceChatManager,
   aiAssistant: MultilingualAiAssistant,
+  permanentPlayerCode: String = "",
+  accountDisplayName: String = "",
   onStartMatchFromLobby: () -> Unit,
   onInvitePeerById: (String) -> Unit,
   onAcceptPeerInvite: () -> Unit,
+  onDeclinePeerInvite: () -> Unit = { voiceManager.declineIncomingInvite() },
+  onRemoveRemoteSquadMember: (String) -> Unit = { voiceManager.removeRemoteSquadMember(it) },
   onSyncLobbyState: () -> Unit,
   onToggleMute: () -> Unit,
   onHudForceRefresh: () -> Unit,
 ) {
   val context = LocalContext.current
   val haptics = LocalHapticFeedback.current
+  val hudPrefs = remember(context) {
+    context.applicationContext.getSharedPreferences("vice_local_profile", Context.MODE_PRIVATE)
+  }
+  var hudConfig by remember(hudPrefs) { mutableStateOf(HudLayoutStore.load(hudPrefs)) }
+  var isHudCustomizeOpen by remember { mutableStateOf(false) }
   val voiceState by voiceManager.uiState.collectAsStateWithLifecycle()
   val aiState by aiAssistant.state.collectAsStateWithLifecycle()
   var pendingAiRecordOnPermission by remember { mutableStateOf(false) }
 
   LaunchedEffect(voiceManager, aiAssistant, context) {
-    aiAssistant.attachContext(context.applicationContext)
+    val appCtx = context.applicationContext
+    voiceManager.attachContext(appCtx)
+    aiAssistant.attachContext(appCtx)
     val granted =
       ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
@@ -134,18 +171,26 @@ fun ViceHorizonScreen(
       }
     }
 
-  val handleMicToggle = {
+  val handleMicToggle: () -> Unit = {
     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-    voiceManager.toggleMicMute()
     val granted =
       ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
     if (!granted) {
+      voiceManager.setMicMuted(false)
       micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-    } else if (!voiceState.hasMicPermission) {
-      voiceManager.onMicPermissionChanged(true)
-      aiAssistant.onMicPermissionChanged(true)
+    } else {
+      if (!voiceState.hasMicPermission) {
+        voiceManager.onMicPermissionChanged(true)
+        aiAssistant.onMicPermissionChanged(true)
+      }
+      voiceManager.toggleMicMute()
     }
+  }
+
+  val handleSpeakerToggle: () -> Unit = {
+    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    voiceManager.toggleSpeakerMute()
   }
 
   val handleConnectVoice = {
@@ -182,13 +227,25 @@ fun ViceHorizonScreen(
     }
   }
 
-  if (hud.isPlaying || hud.isGunShopOpen || aiState.isOpen) {
+  if (hud.isPlaying || hud.isGunShopOpen || hud.isStyleShopOpen || hud.isBagOpen || aiState.isOpen || isHudCustomizeOpen) {
     BackHandler {
-      if (aiState.isOpen) {
+      if (isHudCustomizeOpen) {
+        isHudCustomizeOpen = false
+      } else if (aiState.isOpen) {
         aiAssistant.closePanel()
+      } else if (hud.isStyleShopOpen) {
+        sim.closeStyleShop()
+        onHudForceRefresh()
+      } else if (hud.isBagOpen) {
+        sim.closeBag()
+        onHudForceRefresh()
       } else if (hud.isGunShopOpen) {
         sim.closeGunShop()
         onHudForceRefresh()
+      } else if (hud.isPlayerEliminated) {
+        sim.returnToLobby()
+        onHudForceRefresh()
+        onSyncLobbyState()
       } else if (hud.isPlaying) {
         sim.isPaused = !sim.isPaused
         onHudForceRefresh()
@@ -204,7 +261,17 @@ fun ViceHorizonScreen(
     Vice3DViewport(renderer = renderer, modifier = Modifier.fillMaxSize())
 
     // 2. Camera Orbit / Scope Aim Touch Drag Layer (underneath HUD buttons)
-    if (hud.isPlaying && !hud.isPaused && !hud.isGunShopOpen && !aiState.isOpen) {
+    // Also allows passive camera orbit while spectating killer, with zero control over killer!
+    val canOrbitCamera =
+      hud.isPlaying &&
+        !hud.isPaused &&
+        !hud.isGunShopOpen &&
+        !hud.isStyleShopOpen &&
+        !hud.isBagOpen &&
+        !aiState.isOpen &&
+        !isHudCustomizeOpen &&
+        (!hud.isPlayerEliminated || hud.isSpectatingKiller)
+    if (canOrbitCamera) {
       Box(
         modifier =
           Modifier.fillMaxSize().pointerInput(Unit) {
@@ -217,12 +284,12 @@ fun ViceHorizonScreen(
     }
 
     // 2B. Non-blocking Tactical Scope Reticle Overlay when scoped in
-    if (hud.isPlaying && hud.isScoped && !hud.isPaused && !hud.isGunShopOpen) {
+    if (hud.isPlaying && !hud.isPlayerEliminated && hud.isScoped && !hud.isPaused && !hud.isGunShopOpen) {
       TacticalScopeOverlay(weapon = hud.equippedWeapon)
     }
 
     // 2C. PUBG-style Hard Rooftop Fall Screen-Edge Impact Flash
-    if (hud.isPlaying && hud.activeLandingReaction == LandingReactionType.HARD_STAGGER) {
+    if (hud.isPlaying && !hud.isPlayerEliminated && hud.activeLandingReaction == LandingReactionType.HARD_STAGGER) {
       Box(
         modifier =
           Modifier.fillMaxSize()
@@ -239,17 +306,23 @@ fun ViceHorizonScreen(
 
     // 3. Free Fire-Style 3D Squad Lobby Overlay
     AnimatedVisibility(
-      visible = !hud.isPlaying && !hud.isGunShopOpen,
+      visible = !hud.isPlaying && !hud.isGunShopOpen && !hud.isStyleShopOpen,
       enter = fadeIn(),
       exit = fadeOut(),
     ) {
       ViceLobbyOverlay(
         hud = hud,
         voiceState = voiceState,
+        permanentPlayerCode = permanentPlayerCode,
+        accountDisplayName = accountDisplayName,
         onStartMatch = onStartMatchFromLobby,
         onRotateHero = { deltaX -> sim.input.addOrbitDelta(deltaX, 0f) },
         onOpenGunShop = {
           sim.openGunShop()
+          onHudForceRefresh()
+        },
+        onOpenStyleShop = {
+          sim.openStyleShop()
           onHudForceRefresh()
         },
         onCycleHeroPreset = {
@@ -278,9 +351,11 @@ fun ViceHorizonScreen(
         onCycleDropZone = {
           sim.cycleLobbyDropZone()
           onHudForceRefresh()
+          onSyncLobbyState()
         },
         onToggleAudioMute = onToggleMute,
         onToggleMicMute = handleMicToggle,
+        onToggleSpeakerMute = handleSpeakerToggle,
         onRemotePeerIdChange = { voiceManager.updateRemotePeerIdInput(it) },
         onInvitePeerById = onInvitePeerById,
         onConnectVoice = handleConnectVoice,
@@ -291,37 +366,73 @@ fun ViceHorizonScreen(
         },
         onRemoveSquadMember = { id, isRemoteP2P ->
           if (isRemoteP2P) {
-            voiceManager.removeRemoteSquadMember(id)
+            onRemoveRemoteSquadMember(id)
           } else {
             sim.removeLobbySquadMember(id)
           }
           onHudForceRefresh()
         },
         onAcceptIncomingInvite = onAcceptPeerInvite,
-        onDeclineIncomingInvite = { voiceManager.declineIncomingInvite() },
-        onOpenAiAssistant = { aiAssistant.openPanel() },
+        onDeclineIncomingInvite = onDeclinePeerInvite,
+        onOpenHudSettings = { isHudCustomizeOpen = true },
+        hudScaleMultiplier = hudConfig.effectiveScale(HudElementId.LOBBY_UI),
       )
     }
 
-    // 4. Active In-Game HUD
-    if (hud.isPlaying) {
+    // 4. Active In-Game HUD vs Eliminated / Read-Only Killer Spectate HUD
+    if (hud.isPlaying && hud.isPlayerEliminated) {
+      if (!hud.isSpectatingKiller) {
+        EliminatedOverlay(
+          hud = hud,
+          onShowKiller = {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            sim.startSpectatingKiller()
+            onHudForceRefresh()
+          },
+          onBackToLobby = {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            sim.returnToLobby()
+            onHudForceRefresh()
+            onSyncLobbyState()
+          },
+        )
+      } else {
+        SpectatorHudOverlay(
+          hud = hud,
+          onBackToLobby = {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            sim.returnToLobby()
+            onHudForceRefresh()
+            onSyncLobbyState()
+          },
+        )
+      }
+    } else if (hud.isPlaying) {
       BoxWithConstraints(
         modifier =
           Modifier.fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 7.dp, vertical = 5.dp)
       ) {
-        val compactLandscape = maxHeight < 400.dp
-        val radarSize = if (compactLandscape) 86.dp else 110.dp
-        val joystickSize = if (compactLandscape) 104.dp else 124.dp
+        val compactLandscape = maxHeight <= 500.dp || maxWidth <= 950.dp
+        val density = LocalDensity.current
+        val containerWidthPx = with(density) { maxWidth.toPx() }
+        val containerHeightPx = with(density) { maxHeight.toPx() }
+        val radarSize = ((if (compactLandscape) 72f else 102f) * hudConfig.effectiveScale(HudElementId.MINIMAP)).dp
+        val joystickSize = ((if (compactLandscape) 86f else 116f) * hudConfig.effectiveScale(HudElementId.JOYSTICK)).dp
+        val controlScale = if (compactLandscape) 0.74f else 1f
+        val statusScale = hudConfig.effectiveScale(HudElementId.STATUS_BAR)
+        val voiceScale = hudConfig.effectiveScale(HudElementId.VOICE_HUD)
+        val topUtilScale = hudConfig.effectiveScale(HudElementId.TOP_UTILITIES)
+        val actionPillScale = hudConfig.effectiveScale(HudElementId.ACTION_PILLS)
 
         // Top-Left: Rotating Minimap + Survival Status (HP / Cash / Stars / Panic) + Zone Pill
         Column(
-          verticalArrangement = Arrangement.spacedBy(5.dp),
+          verticalArrangement = Arrangement.spacedBy(if (compactLandscape) 3.dp else 5.dp),
           modifier = Modifier.align(Alignment.TopStart),
         ) {
           Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (compactLandscape) 5.dp else 8.dp),
             verticalAlignment = Alignment.Top,
           ) {
             MinimapRadar(
@@ -332,30 +443,37 @@ fun ViceHorizonScreen(
                 onHudForceRefresh()
               },
               radarSize = radarSize,
+              modifier = Modifier.hudElementOffset(HudElementId.MINIMAP, hudConfig, containerWidthPx, containerHeightPx),
             )
 
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Column(
+              verticalArrangement = Arrangement.spacedBy(((if (compactLandscape) 3f else 5f) * statusScale).dp),
+              modifier = Modifier.hudElementOffset(HudElementId.STATUS_BAR, hudConfig, containerWidthPx, containerHeightPx),
+            ) {
               // Health & Cash Pill
               Column(
                 modifier =
-                  Modifier.clip(RoundedCornerShape(12.dp))
+                  Modifier.clip(RoundedCornerShape(((if (compactLandscape) 8f else 12f) * statusScale).dp))
                     .background(ViceSurface.copy(alpha = 0.84f))
-                    .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 9.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                    .border(0.9.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(((if (compactLandscape) 8f else 12f) * statusScale).dp))
+                    .padding(
+                      horizontal = ((if (compactLandscape) 6f else 9f) * statusScale).dp,
+                      vertical = ((if (compactLandscape) 4f else 6f) * statusScale).dp,
+                    ),
+                verticalArrangement = Arrangement.spacedBy(((if (compactLandscape) 2.5f else 4f) * statusScale).dp),
               ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                   Icon(
                     Icons.Filled.Favorite,
                     contentDescription = "Health",
                     tint = if (hud.playerHealth < 35) SunsetCoral else NeonPink,
-                    modifier = Modifier.size(13.dp),
+                    modifier = Modifier.size(((if (compactLandscape) 10f else 13f) * statusScale).dp),
                   )
-                  Spacer(modifier = Modifier.width(5.dp))
+                  Spacer(modifier = Modifier.width((4f * statusScale).dp))
                   Box(
                     modifier =
-                      Modifier.width(58.dp)
-                        .height(7.dp)
+                      Modifier.width(((if (compactLandscape) 44f else 58f) * statusScale).dp)
+                        .height(((if (compactLandscape) 5f else 7f) * statusScale).dp)
                         .clip(RoundedCornerShape(4.dp))
                         .background(Color.White.copy(alpha = 0.15f))
                   ) {
@@ -367,30 +485,62 @@ fun ViceHorizonScreen(
                           .background(if (hud.playerHealth < 35) SunsetCoral else PalmMint)
                     )
                   }
-                  Spacer(modifier = Modifier.width(5.dp))
+                  Spacer(modifier = Modifier.width((4f * statusScale).dp))
                   Text(
                     text = "${hud.playerHealth}",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = ((if (compactLandscape) 8.5f else 10f) * statusScale).coerceIn(6f, 16f).sp),
                     color = TextPrimary,
                   )
                 }
 
                 Row(
                   verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  horizontalArrangement = Arrangement.spacedBy((6f * statusScale).dp),
                 ) {
                   Text(
                     text = "$${hud.playerCash}",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = ((if (compactLandscape) 9f else 10f) * statusScale).coerceIn(6.5f, 16f).sp, fontWeight = FontWeight.Bold),
                     color = PalmMint,
                     modifier = Modifier.testTag("hud_cash_text"),
                   )
                   if (hud.npcDefeatedCount > 0) {
                     Text(
                       text = "KO ${hud.npcDefeatedCount}",
-                      style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                      style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactLandscape) 8.5.sp else 10.sp),
                       color = GoldenHour,
                     )
+                  }
+                }
+
+                if (hud.vestLevel >= 3 || hud.helmetLevel >= 3) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  ) {
+                    if (hud.vestLevel >= 3) {
+                      val vColor = if (hud.vestLevel >= 4) GoldenHour else ElectricCyan
+                      Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("hud_vest_badge")) {
+                        Icon(Icons.Filled.Shield, contentDescription = "Vest Level ${hud.vestLevel}", tint = vColor, modifier = Modifier.size(11.dp))
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                          text = "V${hud.vestLevel}·${hud.vestDurability}",
+                          style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                          color = vColor,
+                        )
+                      }
+                    }
+                    if (hud.helmetLevel >= 3) {
+                      val hColor = if (hud.helmetLevel >= 4) GoldenHour else ElectricCyan
+                      Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("hud_helmet_badge")) {
+                        Icon(Icons.Filled.Security, contentDescription = "Helmet Level ${hud.helmetLevel}", tint = hColor, modifier = Modifier.size(11.dp))
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                          text = "H${hud.helmetLevel}·${hud.helmetDurability}",
+                          style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                          color = hColor,
+                        )
+                      }
+                    }
                   }
                 }
               }
@@ -475,14 +625,16 @@ fun ViceHorizonScreen(
 
           Box(
             modifier =
-              Modifier.clip(RoundedCornerShape(10.dp))
+              Modifier
+                .hudElementOffset(HudElementId.STATUS_BAR, hudConfig, containerWidthPx, containerHeightPx)
+                .clip(RoundedCornerShape((10f * statusScale).dp))
                 .background(ViceSurface.copy(alpha = 0.80f))
-                .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(10.dp))
-                .padding(horizontal = 10.dp, vertical = 4.dp)
+                .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape((10f * statusScale).dp))
+                .padding(horizontal = (10f * statusScale).dp, vertical = (4f * statusScale).dp)
           ) {
             Text(
               text = hud.zoneName,
-              style = MaterialTheme.typography.labelSmall,
+              style = MaterialTheme.typography.labelSmall.copy(fontSize = (10f * statusScale).coerceIn(7f, 16f).sp),
               color =
                 when {
                   hud.isSitting -> PalmMint
@@ -493,17 +645,30 @@ fun ViceHorizonScreen(
                 },
             )
           }
+
+          // Top-Left Free Fire-Style Floating Mic, Speaker & Speaking Indicator Ring HUD
+          FreeFireInGameVoiceHud(
+            localPlayerName = accountDisplayName.ifBlank { hud.heroPresetName },
+            uiState = voiceState,
+            squadMembers = hud.lobbySquadMembers,
+            onToggleMic = handleMicToggle,
+            onToggleSpeaker = handleSpeakerToggle,
+            modifier = Modifier.hudElementOffset(HudElementId.VOICE_HUD, hudConfig, containerWidthPx, containerHeightPx),
+            compact = compactLandscape,
+            scaleFactor = voiceScale,
+          )
         }
 
         // Top-Right: Two Compact Rows (Utilities + Anytime Gun Shop / Weapon Switcher)
         Column(
           horizontalAlignment = Alignment.End,
-          verticalArrangement = Arrangement.spacedBy(6.dp),
+          verticalArrangement = Arrangement.spacedBy(if (compactLandscape) 4.dp else 6.dp),
           modifier = Modifier.align(Alignment.TopEnd),
         ) {
           Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(((if (compactLandscape) 4f else 6f) * topUtilScale).dp),
             verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.hudElementOffset(HudElementId.TOP_UTILITIES, hudConfig, containerWidthPx, containerHeightPx),
           ) {
             HudIconPill(
               icon = Icons.Filled.WbTwilight,
@@ -514,6 +679,8 @@ fun ViceHorizonScreen(
                   TimeOfDayPreset.NEON_NIGHT -> "NIGHT"
                 },
               accent = GoldenHour,
+              compact = compactLandscape,
+              scaleFactor = topUtilScale,
               onClick = {
                 val values = TimeOfDayPreset.entries
                 sim.timePreset = values[(hud.timePreset.ordinal + 1) % values.size]
@@ -522,9 +689,28 @@ fun ViceHorizonScreen(
               testTagName = "cycle_time_button",
             )
             HudIconPill(
+              icon =
+                when (hud.weatherMode) {
+                  WeatherMode.THUNDERSTORM -> Icons.Filled.Thunderstorm
+                  WeatherMode.LIGHT_RAIN, WeatherMode.MISTY_PETALS -> Icons.Filled.WaterDrop
+                  WeatherMode.CLEAR_BREEZE -> Icons.Filled.WbTwilight
+                },
+              label = hud.weatherMode.shortTag,
+              accent = ElectricCyan,
+              compact = compactLandscape,
+              scaleFactor = topUtilScale,
+              onClick = {
+                sim.cycleWeatherMode()
+                onHudForceRefresh()
+              },
+              testTagName = "weather_toggle_button",
+            )
+            HudIconPill(
               icon = Icons.Filled.Videocam,
               label = null,
               accent = ElectricCyan,
+              compact = compactLandscape,
+              scaleFactor = topUtilScale,
               onClick = {
                 val modes = CameraDistanceMode.entries
                 sim.cameraMode = modes[(hud.cameraMode.ordinal + 1) % modes.size]
@@ -538,20 +724,29 @@ fun ViceHorizonScreen(
                 else Icons.AutoMirrored.Filled.VolumeUp,
               label = null,
               accent = Color.White,
+              compact = compactLandscape,
+              scaleFactor = topUtilScale,
               onClick = onToggleMute,
               testTagName = "mute_button",
             )
             HudIconPill(
-              icon = Icons.Filled.AutoAwesome,
-              label = "AI",
-              accent = ElectricCyan,
-              onClick = { aiAssistant.openPanel() },
-              testTagName = "hud_ai_button",
+              iconPainter = painterResource(R.drawable.ic_hud_settings),
+              label = null,
+              accent = GoldenHour,
+              compact = compactLandscape,
+              scaleFactor = topUtilScale,
+              onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                isHudCustomizeOpen = true
+              },
+              testTagName = "hud_settings_button",
             )
             HudIconPill(
               icon = Icons.Filled.Menu,
               label = "MAP",
               accent = NeonPink,
+              compact = compactLandscape,
+              scaleFactor = topUtilScale,
               onClick = {
                 sim.isPaused = true
                 onHudForceRefresh()
@@ -560,10 +755,11 @@ fun ViceHorizonScreen(
             )
           }
 
-          // Second Top-Right Row: Weapon, Gun Shop, Voice Panel Toggle, Free Fire Mic Toggle
+          // Second Top-Right Row: Weapon, Bag, Quick Medkit, Gun Shop, Voice Panel Toggle, Free Fire Mic Toggle
           Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(((if (compactLandscape) 4f else 6f) * actionPillScale).dp),
             verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.hudElementOffset(HudElementId.ACTION_PILLS, hudConfig, containerWidthPx, containerHeightPx),
           ) {
             HudIconPill(
               icon =
@@ -572,6 +768,8 @@ fun ViceHorizonScreen(
               label = hud.equippedWeapon.shortTag,
               accent = ElectricCyan,
               trailingIcon = if (hud.ownedWeapons.size > 1) Icons.Filled.SwapHoriz else null,
+              compact = compactLandscape,
+              scaleFactor = actionPillScale,
               onClick = {
                 if (hud.ownedWeapons.size > 1) {
                   sim.cycleWeapon()
@@ -583,9 +781,38 @@ fun ViceHorizonScreen(
               testTagName = "cycle_weapon_button",
             )
             HudIconPill(
+              icon = Icons.Filled.Backpack,
+              label = "BAG ${hud.bagItems.size}/${hud.bagCapacity}",
+              accent = if (hud.isBagFull) SunsetCoral else ElectricCyan,
+              compact = compactLandscape,
+              scaleFactor = actionPillScale,
+              onClick = {
+                sim.toggleBag()
+                onHudForceRefresh()
+              },
+              testTagName = "bag_button",
+            )
+            if (hud.medkitCount > 0) {
+              HudIconPill(
+                icon = Icons.Filled.MedicalServices,
+                label = "MED×${hud.medkitCount}",
+                accent = PalmMint,
+                compact = compactLandscape,
+                scaleFactor = actionPillScale,
+                onClick = {
+                  haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                  sim.useQuickMedkit()
+                  onHudForceRefresh()
+                },
+                testTagName = "quick_medkit_button",
+              )
+            }
+            HudIconPill(
               icon = Icons.Filled.Storefront,
-              label = "GUN SHOP",
+              label = "SHOP",
               accent = GoldenHour,
+              compact = compactLandscape,
+              scaleFactor = actionPillScale,
               onClick = {
                 sim.openGunShop()
                 onHudForceRefresh()
@@ -594,12 +821,18 @@ fun ViceHorizonScreen(
             )
             VoiceSquadTogglePill(
               uiState = voiceState,
+              compact = compactLandscape,
+              scaleFactor = actionPillScale,
               onClick = { voiceManager.togglePanelExpanded() },
             )
             FreeFireMicToggleButton(
               isMicMuted = voiceState.isMicMuted,
               status = voiceState.status,
               hasMicPermission = voiceState.hasMicPermission,
+              isSpeaking = voiceState.isLocalSpeaking,
+              voiceLevel = voiceState.localVoiceLevel,
+              compact = compactLandscape,
+              compactHeightDp = 28f * actionPillScale,
               onClick = handleMicToggle,
             )
           }
@@ -628,6 +861,15 @@ fun ViceHorizonScreen(
                 color = GoldenHour,
               )
             }
+          }
+
+          val incomingInGame = voiceState.incomingInvite
+          if (incomingInGame != null) {
+            SquadInvitePopup(
+              invite = incomingInGame,
+              onAccept = onAcceptPeerInvite,
+              onDecline = onDeclinePeerInvite,
+            )
           }
 
           if (!hud.isPaused && !hud.isGunShopOpen) {
@@ -665,6 +907,8 @@ fun ViceHorizonScreen(
               if (hud.nearbyVehicleOccupied) "CARJACK ${hud.nearbyVehicleName.uppercase()}"
               else "NEAR ${hud.nearbyVehicleName.uppercase()}"
             hud.nearbyGunShop -> "VICE ARMS COUNTER · TAP BUY GUNS"
+            hud.nearbyMarketStallLabel != null -> "${hud.nearbyMarketStallLabel.uppercase()} · TAP BUY $25 (+35 HP)"
+            hud.nearbyLootLabel != null -> hud.nearbyLootLabel
             hud.insideHouseName != null -> "EXPLORING ${hud.insideHouseName.uppercase()}"
             hud.isSwimming -> "SWIM TOWARD BOATS OR BEACH"
             else -> null
@@ -688,7 +932,7 @@ fun ViceHorizonScreen(
         }
 
         // Bottom Controls: Airborne Plane/Parachute Drop vs On Foot vs Driving Car / Boat
-        if (!hud.isPaused && !hud.isGunShopOpen && !hud.isCarjacking) {
+        if (!hud.isPaused && !hud.isGunShopOpen && !hud.isBagOpen && !hud.isCarjacking && !isHudCustomizeOpen) {
           when {
             hud.dropPhase != DropPhase.GROUND -> {
               if (hud.dropPhase == DropPhase.FREEFALL || hud.dropPhase == DropPhase.PARACHUTE) {
@@ -697,7 +941,10 @@ fun ViceHorizonScreen(
                     sim.input.moveX = mx
                     sim.input.moveY = my
                   },
-                  modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 6.dp),
+                  modifier =
+                    Modifier.align(Alignment.BottomStart)
+                      .padding(bottom = 6.dp)
+                      .hudElementOffset(HudElementId.JOYSTICK, hudConfig, containerWidthPx, containerHeightPx),
                   size = joystickSize,
                 )
               }
@@ -715,14 +962,22 @@ fun ViceHorizonScreen(
                   sim.deployParachute()
                   onHudForceRefresh()
                 },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 6.dp),
+                compactScale = controlScale,
+                hudConfig = hudConfig,
+                containerWidthPx = containerWidthPx,
+                containerHeightPx = containerHeightPx,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 4.dp),
               )
             }
             hud.isDriving -> {
               DrivingControlsLeft(
                 onSteerLeft = { sim.input.steerLeft = it },
                 onSteerRight = { sim.input.steerRight = it },
-                modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 6.dp),
+                compactScale = controlScale,
+                hudConfig = hudConfig,
+                containerWidthPx = containerWidthPx,
+                containerHeightPx = containerHeightPx,
+                modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 4.dp),
               )
               DrivingControlsRight(
                 speedKmh = hud.speedKmh,
@@ -736,7 +991,11 @@ fun ViceHorizonScreen(
                   sim.toggleEnterExitVehicleOrBoat()
                   onHudForceRefresh()
                 },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 6.dp),
+                compactScale = controlScale,
+                hudConfig = hudConfig,
+                containerWidthPx = containerWidthPx,
+                containerHeightPx = containerHeightPx,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 4.dp),
               )
             }
             else -> {
@@ -745,7 +1004,10 @@ fun ViceHorizonScreen(
                 sim.input.moveX = mx
                 sim.input.moveY = my
               },
-              modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 6.dp),
+              modifier =
+                Modifier.align(Alignment.BottomStart)
+                  .padding(bottom = 4.dp)
+                  .hudElementOffset(HudElementId.JOYSTICK, hudConfig, containerWidthPx, containerHeightPx),
               size = joystickSize,
             )
             OnFootActionPad(
@@ -754,12 +1016,19 @@ fun ViceHorizonScreen(
               nearbyBoatName = hud.nearbyBoatName,
               nearbyBoatOccupied = hud.nearbyBoatOccupied,
               nearbyGunShop = hud.nearbyGunShop,
+              nearbyMarketStallLabel = hud.nearbyMarketStallLabel,
               nearbyFriendCandidate = hud.nearbyFriendCandidateId != null,
               nearbyParkourLabel = hud.nearbyParkourLabel,
               isSitting = hud.isSitting,
               isScoped = hud.isScoped,
               equippedWeapon = hud.equippedWeapon,
-              onSprintChange = { sim.input.sprintHeld = it },
+              glooWallCount = hud.glooWallCount,
+              isAutoSprinting = hud.isAutoSprinting,
+              onSprintToggleTap = {
+                sim.toggleAutoSprint()
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onHudForceRefresh()
+              },
               onJumpTap = {
                 sim.input.jumpQueued = true
                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -804,6 +1073,20 @@ fun ViceHorizonScreen(
                 sim.openGunShop()
                 onHudForceRefresh()
               },
+              onBuyMarketSnackTap = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                sim.buyMarketSnack()
+                onHudForceRefresh()
+              },
+              onDeployGlooWallTap = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                sim.deployPlayerGlooWall()
+                onHudForceRefresh()
+              },
+              compactScale = controlScale,
+              hudConfig = hudConfig,
+              containerWidthPx = containerWidthPx,
+              containerHeightPx = containerHeightPx,
               modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 4.dp),
             )
             }
@@ -833,9 +1116,81 @@ fun ViceHorizonScreen(
       )
     }
 
+    // 5A. Lobby Side Style & Skins Store (Clothes, Hair Style, Pants, Gun Paint, Car Skins)
+    AnimatedVisibility(
+      visible = !hud.isPlaying && hud.isStyleShopOpen,
+      enter = fadeIn(),
+      exit = fadeOut(),
+    ) {
+      StyleShopModal(
+        hud = hud,
+        onSelectCloth = { cloth ->
+          haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+          sim.buyOrEquipCloth(cloth)
+          onHudForceRefresh()
+          onSyncLobbyState()
+        },
+        onSelectHair = { hair ->
+          haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+          sim.buyOrEquipHair(hair)
+          onHudForceRefresh()
+          onSyncLobbyState()
+        },
+        onSelectPants = { pants ->
+          haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+          sim.buyOrEquipPants(pants)
+          onHudForceRefresh()
+          onSyncLobbyState()
+        },
+        onSelectGunSkin = { skin ->
+          haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+          sim.buyOrEquipGunSkin(skin)
+          onHudForceRefresh()
+          onSyncLobbyState()
+        },
+        onSelectCarSkin = { skin ->
+          haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+          sim.buyOrEquipCarSkin(skin)
+          onHudForceRefresh()
+          onSyncLobbyState()
+        },
+        onClose = {
+          sim.closeStyleShop()
+          onHudForceRefresh()
+        },
+      )
+    }
+
+    // 5B. Tactical Backpack Modal (Auto-Pickup Loot, Medkits, Guns, Lv.3/4 Vests & Helmets, Remove when full)
+    AnimatedVisibility(
+      visible = hud.isPlaying && !hud.isPlayerEliminated && hud.isBagOpen,
+      enter = fadeIn(),
+      exit = fadeOut(),
+    ) {
+      BackpackModal(
+        hud = hud,
+        onUseOrEquip = { uid ->
+          haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+          sim.useOrEquipBagItem(uid)
+          onHudForceRefresh()
+          onSyncLobbyState()
+        },
+        onRemove = { uid ->
+          haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          sim.removeBagItem(uid, dropToWorld = true)
+          onHudForceRefresh()
+          onSyncLobbyState()
+        },
+        onClose = {
+          sim.closeBag()
+          onHudForceRefresh()
+        },
+      )
+    }
+
     // 6. Pause & Fast-Travel Map Overlay
     AnimatedVisibility(
-      visible = hud.isPlaying && hud.isPaused && !hud.isGunShopOpen,
+      visible = hud.isPlaying && !hud.isPlayerEliminated && hud.isPaused && !hud.isGunShopOpen && !hud.isBagOpen,
       enter = fadeIn(),
       exit = fadeOut(),
     ) {
@@ -875,6 +1230,29 @@ fun ViceHorizonScreen(
           sim.timePreset = preset
           onHudForceRefresh()
         },
+        onSelectWeather = { mode ->
+          sim.setWeatherMode(mode)
+          onHudForceRefresh()
+        },
+        onToggleAutoWeather = {
+          sim.toggleAutoWeather()
+          onHudForceRefresh()
+        },
+        onTeleportMarket = {
+          sim.teleportToMarket()
+          sim.isPaused = false
+          onHudForceRefresh()
+        },
+        onTeleportWaterfall = {
+          sim.teleportToWaterfall()
+          sim.isPaused = false
+          onHudForceRefresh()
+        },
+        onTeleportAtoll = {
+          sim.teleportToAtoll()
+          sim.isPaused = false
+          onHudForceRefresh()
+        },
         onCycleCamera = {
           val modes = CameraDistanceMode.entries
           sim.cameraMode = modes[(hud.cameraMode.ordinal + 1) % modes.size]
@@ -888,6 +1266,7 @@ fun ViceHorizonScreen(
         onReturnToLobby = {
           sim.returnToLobby()
           onHudForceRefresh()
+          onSyncLobbyState()
         },
       )
     }
@@ -910,36 +1289,77 @@ fun ViceHorizonScreen(
         onClose = { aiAssistant.closePanel() },
       )
     }
+
+    // 8. Free Fire-Style Custom HUD Icon Size Settings Overlay
+    AnimatedVisibility(
+      visible = isHudCustomizeOpen,
+      enter = fadeIn(),
+      exit = fadeOut(),
+    ) {
+      HudCustomizeOverlay(
+        initialConfig = hudConfig,
+        onSave = { updated ->
+          hudConfig = updated
+          HudLayoutStore.save(hudPrefs, updated)
+          isHudCustomizeOpen = false
+        },
+        onCancel = { isHudCustomizeOpen = false },
+      )
+    }
   }
 }
 
 @Composable
 private fun HudIconPill(
-  icon: ImageVector,
+  icon: ImageVector? = null,
+  iconPainter: Painter? = null,
   label: String?,
   accent: Color,
   onClick: () -> Unit,
   testTagName: String,
   trailingIcon: ImageVector? = null,
+  compact: Boolean = false,
+  scaleFactor: Float = 1f,
 ) {
+  val touchMod = if (compact || scaleFactor < 0.95f) Modifier else Modifier.minimumInteractiveComponentSize()
+  val cornerDp = ((if (compact) 9f else 14f) * scaleFactor).dp
+  val iconDp = ((if (compact) 13f else 18f) * scaleFactor).dp
+  val labelSp = ((if (compact) 9f else 11f) * scaleFactor).coerceIn(6.5f, 17f).sp
   Row(
     verticalAlignment = Alignment.CenterVertically,
     modifier =
-      Modifier.clip(RoundedCornerShape(14.dp))
+      touchMod
+        .clip(RoundedCornerShape(cornerDp))
         .background(ViceSurface.copy(alpha = 0.80f))
-        .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+        .border(0.9.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(cornerDp))
         .clickable(onClick = onClick)
-        .padding(horizontal = 9.dp, vertical = 9.dp)
+        .padding(
+          horizontal = ((if (compact) 7f else 9f) * scaleFactor).dp,
+          vertical = ((if (compact) 4f else 9f) * scaleFactor).dp,
+        )
         .testTag(testTagName),
   ) {
-    Icon(icon, contentDescription = label ?: testTagName, tint = accent, modifier = Modifier.size(18.dp))
+    if (iconPainter != null) {
+      Icon(iconPainter, contentDescription = label ?: testTagName, tint = accent, modifier = Modifier.size(iconDp))
+    } else if (icon != null) {
+      Icon(icon, contentDescription = label ?: testTagName, tint = accent, modifier = Modifier.size(iconDp))
+    }
     if (label != null) {
-      Spacer(modifier = Modifier.width(5.dp))
-      Text(label, style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+      Spacer(modifier = Modifier.width(((if (compact) 3f else 5f) * scaleFactor).dp))
+      Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = labelSp),
+        color = TextPrimary,
+      )
     }
     if (trailingIcon != null) {
-      Spacer(modifier = Modifier.width(3.dp))
-      Icon(trailingIcon, contentDescription = null, tint = accent.copy(alpha = 0.85f), modifier = Modifier.size(14.dp))
+      Spacer(modifier = Modifier.width((2f * scaleFactor).dp))
+      Icon(
+        trailingIcon,
+        contentDescription = null,
+        tint = accent.copy(alpha = 0.85f),
+        modifier = Modifier.size(((if (compact) 11f else 14f) * scaleFactor).dp),
+      )
     }
   }
 }
@@ -1013,5 +1433,260 @@ private fun TacticalScopeOverlay(weapon: WeaponType) {
           .background(ViceSurface.copy(alpha = 0.72f))
           .padding(horizontal = 8.dp, vertical = 3.dp),
     )
+  }
+}
+
+@Composable
+private fun EliminatedOverlay(
+  hud: HudSnapshot,
+  onShowKiller: () -> Unit,
+  onBackToLobby: () -> Unit,
+) {
+  BoxWithConstraints(
+    modifier =
+      Modifier.fillMaxSize()
+        .background(
+          Brush.radialGradient(
+            0.0f to SunsetCoral.copy(alpha = 0.14f),
+            1.0f to ViceVoid.copy(alpha = 0.72f),
+          )
+        )
+        .windowInsetsPadding(WindowInsets.safeDrawing)
+        .padding(horizontal = 10.dp, vertical = 8.dp)
+        .testTag("eliminated_overlay")
+  ) {
+    val compactMobile = maxHeight <= 500.dp || maxWidth <= 950.dp
+    // Center Elimination Card + Coin Reward + Back to Lobby
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(if (compactMobile) 6.dp else 10.dp),
+      modifier =
+        Modifier.align(Alignment.Center)
+          .clip(RoundedCornerShape(if (compactMobile) 16.dp else 22.dp))
+          .background(ViceSurfaceSolid.copy(alpha = 0.94f))
+          .border(1.3.dp, SunsetCoral.copy(alpha = 0.75f), RoundedCornerShape(if (compactMobile) 16.dp else 22.dp))
+          .padding(horizontal = if (compactMobile) 16.dp else 24.dp, vertical = if (compactMobile) 12.dp else 18.dp),
+    ) {
+      Text(
+        text = "YOU WERE ELIMINATED",
+        style =
+          (if (compactMobile) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall)
+            .copy(fontWeight = FontWeight.ExtraBold),
+        color = SunsetCoral,
+      )
+      Text(
+        text = "KILLED BY ${(hud.eliminatedByName ?: "RIVAL").uppercase()} · ${hud.eliminatedByWeapon.displayName}",
+        style =
+          (if (compactMobile) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge)
+            .copy(fontWeight = FontWeight.Bold),
+        color = TextPrimary,
+      )
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier =
+          Modifier.clip(RoundedCornerShape(if (compactMobile) 9.dp else 12.dp))
+            .background(GoldenHour.copy(alpha = 0.16f))
+            .border(1.dp, GoldenHour.copy(alpha = 0.65f), RoundedCornerShape(if (compactMobile) 9.dp else 12.dp))
+            .padding(horizontal = if (compactMobile) 10.dp else 14.dp, vertical = if (compactMobile) 5.dp else 8.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Filled.MonetizationOn,
+          contentDescription = "Coins Added to ID",
+          tint = GoldenHour,
+          modifier = Modifier.size(if (compactMobile) 16.dp else 20.dp),
+        )
+        Text(
+          text = "+${hud.lastMatchCoinsEarned} COINS ADDED TO ID · TOTAL $${hud.playerCash}",
+          style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 9.5.sp else 11.sp, fontWeight = FontWeight.ExtraBold),
+          color = GoldenHour,
+          modifier = Modifier.testTag("eliminated_coins_reward"),
+        )
+      }
+
+      Button(
+        onClick = onBackToLobby,
+        colors = ButtonDefaults.buttonColors(containerColor = NeonPink, contentColor = ViceVoid),
+        shape = RoundedCornerShape(10.dp),
+        contentPadding =
+          if (compactMobile) PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+          else ButtonDefaults.ContentPadding,
+        modifier =
+          Modifier.height(if (compactMobile) 34.dp else 48.dp)
+            .testTag("eliminated_back_lobby_button"),
+      ) {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+          contentDescription = null,
+          modifier = Modifier.size(if (compactMobile) 14.dp else 18.dp),
+        )
+        Spacer(modifier = Modifier.width(5.dp))
+        Text(
+          text = "BACK TO LOBBY",
+          fontWeight = FontWeight.ExtraBold,
+          style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 10.sp else 12.sp),
+        )
+      }
+    }
+
+    // Right-side "SHOW" option button to watch the killer live (read-only spectate)
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(2.dp),
+      modifier =
+        Modifier.align(Alignment.CenterEnd)
+          .clip(RoundedCornerShape(if (compactMobile) 14.dp else 18.dp))
+          .background(
+            Brush.verticalGradient(
+              listOf(ElectricCyan.copy(alpha = 0.92f), PalmMint.copy(alpha = 0.88f))
+            )
+          )
+          .border(1.5.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(if (compactMobile) 14.dp else 18.dp))
+          .clickable(onClick = onShowKiller)
+          .padding(horizontal = if (compactMobile) 12.dp else 18.dp, vertical = if (compactMobile) 9.dp else 14.dp)
+          .testTag("spectate_killer_button"),
+    ) {
+      Icon(
+        imageVector = Icons.Filled.Visibility,
+        contentDescription = "Show Killer",
+        tint = ViceVoid,
+        modifier = Modifier.size(if (compactMobile) 20.dp else 26.dp),
+      )
+      Text(
+        text = "SHOW",
+        style =
+          (if (compactMobile) MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleMedium)
+            .copy(fontWeight = FontWeight.ExtraBold),
+        color = ViceVoid,
+      )
+      Text(
+        text = "WATCH KILLER",
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 8.sp else 9.sp, fontWeight = FontWeight.Bold),
+        color = ViceVoid.copy(alpha = 0.86f),
+      )
+    }
+  }
+}
+
+@Composable
+private fun SpectatorHudOverlay(
+  hud: HudSnapshot,
+  onBackToLobby: () -> Unit,
+) {
+  BoxWithConstraints(
+    modifier =
+      Modifier.fillMaxSize()
+        .windowInsetsPadding(WindowInsets.safeDrawing)
+        .padding(horizontal = 10.dp, vertical = 6.dp)
+        .testTag("spectator_hud_overlay")
+  ) {
+    val compactMobile = maxHeight <= 500.dp || maxWidth <= 950.dp
+    // Top-Center Read-Only Killer Status Pill
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(if (compactMobile) 2.dp else 4.dp),
+      modifier =
+        Modifier.align(Alignment.TopCenter)
+          .clip(RoundedCornerShape(if (compactMobile) 12.dp else 16.dp))
+          .background(ViceSurfaceSolid.copy(alpha = 0.90f))
+          .border(1.2.dp, ElectricCyan.copy(alpha = 0.72f), RoundedCornerShape(if (compactMobile) 12.dp else 16.dp))
+          .padding(horizontal = if (compactMobile) 11.dp else 16.dp, vertical = if (compactMobile) 5.dp else 8.dp),
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(if (compactMobile) 6.dp else 8.dp),
+      ) {
+        Box(
+          modifier =
+            Modifier.clip(RoundedCornerShape(5.dp))
+              .background(SunsetCoral)
+              .padding(horizontal = 6.dp, vertical = 1.5.dp)
+        ) {
+          Text(
+            text = "SPECTATING",
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 8.5.sp else 10.sp, fontWeight = FontWeight.ExtraBold),
+            color = Color.White,
+          )
+        }
+        Text(
+          text = (hud.spectatingTargetName ?: hud.eliminatedByName ?: "KILLER").uppercase(),
+          style = MaterialTheme.typography.labelMedium.copy(fontSize = if (compactMobile) 10.sp else 13.sp, fontWeight = FontWeight.ExtraBold),
+          color = TextPrimary,
+          modifier = Modifier.testTag("spectating_killer_name"),
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Icon(
+            imageVector = Icons.Filled.Favorite,
+            contentDescription = "Killer HP",
+            tint = PalmMint,
+            modifier = Modifier.size(if (compactMobile) 11.dp else 13.dp),
+          )
+          Spacer(modifier = Modifier.width(3.dp))
+          Text(
+            text = "${hud.spectatingTargetHp} HP",
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 9.sp else 11.sp, fontWeight = FontWeight.Bold),
+            color = PalmMint,
+          )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Icon(
+            imageVector = Icons.Filled.GpsFixed,
+            contentDescription = "Killer Weapon",
+            tint = GoldenHour,
+            modifier = Modifier.size(if (compactMobile) 11.dp else 13.dp),
+          )
+          Spacer(modifier = Modifier.width(3.dp))
+          Text(
+            text = hud.spectatingTargetWeapon.shortTag,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 9.sp else 11.sp, fontWeight = FontWeight.Bold),
+            color = GoldenHour,
+          )
+        }
+      }
+
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Filled.Lock,
+          contentDescription = "Controls Locked",
+          tint = ElectricCyan,
+          modifier = Modifier.size(10.dp),
+        )
+        Text(
+          text = "VIEW ONLY · CONTROLS LOCKED · DRAG TO ROTATE CAMERA",
+          style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 8.sp else 9.sp, fontWeight = FontWeight.SemiBold),
+          color = TextSecondary,
+        )
+      }
+    }
+
+    // Side / Top-Right "BACK" Button to return to Lobby and start a new match
+    Button(
+      onClick = onBackToLobby,
+      colors = ButtonDefaults.buttonColors(containerColor = GoldenHour, contentColor = ViceVoid),
+      shape = RoundedCornerShape(if (compactMobile) 10.dp else 14.dp),
+      contentPadding =
+        if (compactMobile) PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+        else ButtonDefaults.ContentPadding,
+      modifier =
+        Modifier.align(Alignment.CenterEnd)
+          .height(if (compactMobile) 34.dp else 52.dp)
+          .border(1.2.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(if (compactMobile) 10.dp else 14.dp))
+          .testTag("spectate_back_to_lobby_button"),
+    ) {
+      Icon(
+        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+        contentDescription = "Back to Lobby",
+        modifier = Modifier.size(if (compactMobile) 14.dp else 18.dp),
+      )
+      Spacer(modifier = Modifier.width(5.dp))
+      Text(
+        text = "BACK TO LOBBY",
+        fontWeight = FontWeight.ExtraBold,
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compactMobile) 9.5.sp else 12.sp),
+      )
+    }
   }
 }

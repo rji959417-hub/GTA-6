@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,6 +32,8 @@ import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Paragliding
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.ShoppingBasket
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SportsMma
 import androidx.compose.material.icons.filled.Storefront
@@ -53,9 +56,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.game.state.DropPhase
+import com.example.game.state.HudElementId
+import com.example.game.state.HudLayoutConfig
 import com.example.game.state.WeaponType
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.GoldenHour
@@ -65,6 +71,24 @@ import com.example.ui.theme.SunsetCoral
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.ViceSurface
 import kotlin.math.hypot
+import kotlin.math.roundToInt
+
+internal fun Modifier.hudElementOffset(
+  id: HudElementId,
+  hudConfig: HudLayoutConfig,
+  containerWidthPx: Float,
+  containerHeightPx: Float,
+): Modifier {
+  if (containerWidthPx <= 1f || containerHeightPx <= 1f) return this
+  val off = hudConfig.offsetOf(id)
+  if (kotlin.math.abs(off.normX) < 0.001f && kotlin.math.abs(off.normY) < 0.001f) return this
+  return this.offset {
+    IntOffset(
+      x = (off.normX * containerWidthPx).roundToInt(),
+      y = (off.normY * containerHeightPx).roundToInt(),
+    )
+  }
+}
 
 @Composable
 fun VirtualJoystick(
@@ -127,25 +151,27 @@ fun VirtualJoystick(
   ) {
     Canvas(modifier = Modifier.matchParentSize()) {
       val c = Offset(this.size.width * 0.5f, this.size.height * 0.5f)
+      val dim = this.size.minDimension
       drawCircle(
         color = Color.White.copy(alpha = 0.08f),
-        radius = this.size.minDimension * 0.28f,
+        radius = dim * 0.28f,
         center = c,
       )
       val knobCenter = c + knobOffset
+      val knobRadius = (dim * 0.172f).coerceIn(10f, 70f)
       drawCircle(
         brush =
           Brush.radialGradient(
             colors = listOf(ElectricCyan, Color(0xFF158A9E)),
             center = knobCenter,
-            radius = 28.dp.toPx(),
+            radius = (dim * 0.24f).coerceAtLeast(12f),
           ),
-        radius = 22.dp.toPx(),
+        radius = knobRadius,
         center = knobCenter,
       )
       drawCircle(
         color = Color.White.copy(alpha = 0.7f),
-        radius = 8.dp.toPx(),
+        radius = (dim * 0.062f).coerceIn(4f, 26f),
         center = knobCenter,
       )
     }
@@ -164,19 +190,22 @@ fun HoldControlButton(
   testTagName: String = "",
 ) {
   var pressed by remember { mutableStateOf(false) }
+  val isCompact = height < 52.dp || width < 52.dp
 
+  val iconDp = (minOf(width.value, height.value) * 0.34f).coerceIn(10f, 34f).dp
+  val labelSp = (minOf(width.value, height.value) * 0.175f).coerceIn(6.8f, 14f).sp
   Box(
     modifier =
       modifier
         .size(width = width, height = height)
-        .clip(RoundedCornerShape(18.dp))
+        .clip(RoundedCornerShape(if (isCompact) 12.dp else 18.dp))
         .background(
           if (pressed) accentColor.copy(alpha = 0.38f) else ViceSurface.copy(alpha = 0.78f)
         )
         .border(
-          width = if (pressed) 2.dp else 1.2.dp,
+          width = if (pressed) 1.8.dp else 1.1.dp,
           color = if (pressed) accentColor else accentColor.copy(alpha = 0.50f),
-          shape = RoundedCornerShape(18.dp),
+          shape = RoundedCornerShape(if (isCompact) 12.dp else 18.dp),
         )
         .then(if (testTagName.isNotEmpty()) Modifier.testTag(testTagName) else Modifier)
         .pointerInput(Unit) {
@@ -202,13 +231,14 @@ fun HoldControlButton(
         imageVector = icon,
         contentDescription = label,
         tint = if (pressed) Color.White else accentColor,
-        modifier = Modifier.size(22.dp),
+        modifier = Modifier.size(iconDp),
       )
-      Spacer(modifier = Modifier.height(2.dp))
+      Spacer(modifier = Modifier.height(if (isCompact) 1.dp else 2.dp))
       Text(
         text = label,
-        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = labelSp),
         color = TextPrimary,
+        maxLines = 1,
       )
     }
   }
@@ -221,12 +251,15 @@ fun OnFootActionPad(
   nearbyBoatName: String?,
   nearbyBoatOccupied: Boolean,
   nearbyGunShop: Boolean,
+  nearbyMarketStallLabel: String? = null,
   nearbyFriendCandidate: Boolean,
   nearbyParkourLabel: String?,
   isSitting: Boolean,
   isScoped: Boolean,
   equippedWeapon: WeaponType,
-  onSprintChange: (Boolean) -> Unit,
+  glooWallCount: Int = 0,
+  isAutoSprinting: Boolean = false,
+  onSprintToggleTap: () -> Unit = {},
   onJumpTap: () -> Unit,
   onClimbTap: () -> Unit,
   onEnterCraftTap: () -> Unit,
@@ -237,22 +270,42 @@ fun OnFootActionPad(
   onKickTap: () -> Unit,
   onFireChange: (Boolean) -> Unit,
   onOpenGunShopTap: () -> Unit,
+  onBuyMarketSnackTap: () -> Unit = {},
+  onDeployGlooWallTap: () -> Unit = {},
   modifier: Modifier = Modifier,
+  compactScale: Float = 1f,
+  hudConfig: HudLayoutConfig = HudLayoutConfig.DEFAULT,
+  containerWidthPx: Float = 0f,
+  containerHeightPx: Float = 0f,
 ) {
+  val gap = (8f * compactScale).dp
+  val ctxScale = compactScale * hudConfig.effectiveScale(HudElementId.CONTEXT_ACTION)
+  val glooScale = compactScale * hudConfig.effectiveScale(HudElementId.GLOO_WALL)
+  val sitScale = compactScale * hudConfig.effectiveScale(HudElementId.SIT)
+  val kickScale = compactScale * hudConfig.effectiveScale(HudElementId.KICK)
+  val punchScale = compactScale * hudConfig.effectiveScale(HudElementId.PUNCH)
+  val scopeScale = compactScale * hudConfig.effectiveScale(HudElementId.SCOPE)
+  val shootScale = compactScale * hudConfig.effectiveScale(HudElementId.SHOOT)
+  val jumpScale = compactScale * hudConfig.effectiveScale(HudElementId.JUMP)
+  val sprintScale = compactScale * hudConfig.effectiveScale(HudElementId.SPRINT)
+
   Column(
     horizontalAlignment = Alignment.End,
-    verticalArrangement = Arrangement.spacedBy(8.dp),
+    verticalArrangement = Arrangement.spacedBy(gap),
     modifier = modifier,
   ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+      horizontalArrangement = Arrangement.spacedBy(gap),
+      modifier = Modifier.hudElementOffset(HudElementId.CONTEXT_ACTION, hudConfig, containerWidthPx, containerHeightPx),
+    ) {
       if (nearbyParkourLabel != null) {
         TapControlButton(
           label = nearbyParkourLabel,
           icon = Icons.Filled.Upgrade,
           accentColor = ElectricCyan,
           onClick = onClimbTap,
-          width = 108.dp,
-          height = 50.dp,
+          width = (108f * ctxScale).dp,
+          height = (50f * ctxScale).dp,
           testTagName = "climb_button",
         )
       }
@@ -262,8 +315,8 @@ fun OnFootActionPad(
           icon = Icons.Filled.PersonAdd,
           accentColor = PalmMint,
           onClick = onBefriendTap,
-          width = 88.dp,
-          height = 50.dp,
+          width = (88f * ctxScale).dp,
+          height = (50f * ctxScale).dp,
           testTagName = "befriend_button",
         )
       }
@@ -274,8 +327,8 @@ fun OnFootActionPad(
             icon = Icons.Filled.DirectionsBoat,
             accentColor = if (nearbyBoatOccupied) NeonPink else PalmMint,
             onClick = onEnterCraftTap,
-            width = 104.dp,
-            height = 50.dp,
+            width = (104f * ctxScale).dp,
+            height = (50f * ctxScale).dp,
             testTagName = "enter_boat_button",
           )
         }
@@ -285,8 +338,8 @@ fun OnFootActionPad(
             icon = Icons.Filled.DirectionsCar,
             accentColor = if (nearbyVehicleOccupied) NeonPink else GoldenHour,
             onClick = onEnterCraftTap,
-            width = 96.dp,
-            height = 50.dp,
+            width = (96f * ctxScale).dp,
+            height = (50f * ctxScale).dp,
             testTagName = "enter_car_button",
           )
         }
@@ -296,23 +349,47 @@ fun OnFootActionPad(
             icon = Icons.Filled.Storefront,
             accentColor = GoldenHour,
             onClick = onOpenGunShopTap,
-            width = 106.dp,
-            height = 50.dp,
+            width = (106f * ctxScale).dp,
+            height = (50f * ctxScale).dp,
             testTagName = "context_gun_shop_button",
+          )
+        }
+        nearbyMarketStallLabel != null -> {
+          TapControlButton(
+            label = "BUY $25",
+            icon = Icons.Filled.ShoppingBasket,
+            accentColor = PalmMint,
+            onClick = onBuyMarketSnackTap,
+            width = (104f * ctxScale).dp,
+            height = (50f * ctxScale).dp,
+            testTagName = "buy_market_snack_button",
           )
         }
       }
     }
 
-    // Upper Combat & Posture Row: SIT/STAND · KICK · PUNCH
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Upper Combat & Posture Row: GLOO · SIT/STAND · KICK · PUNCH
+    Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+      if (glooWallCount > 0) {
+        TapControlButton(
+          label = "GLOO×$glooWallCount",
+          icon = Icons.Filled.Shield,
+          accentColor = ElectricCyan,
+          onClick = onDeployGlooWallTap,
+          modifier = Modifier.hudElementOffset(HudElementId.GLOO_WALL, hudConfig, containerWidthPx, containerHeightPx),
+          width = (72f * glooScale).dp,
+          height = (52f * glooScale).dp,
+          testTagName = "gloo_wall_button",
+        )
+      }
       TapControlButton(
         label = if (isSitting) "STAND" else "SIT",
         icon = Icons.Filled.EventSeat,
         accentColor = if (isSitting) PalmMint else ElectricCyan,
         onClick = onSitToggleTap,
-        width = 60.dp,
-        height = 52.dp,
+        modifier = Modifier.hudElementOffset(HudElementId.SIT, hudConfig, containerWidthPx, containerHeightPx),
+        width = (60f * sitScale).dp,
+        height = (52f * sitScale).dp,
         testTagName = "sit_button",
       )
       TapControlButton(
@@ -320,8 +397,9 @@ fun OnFootActionPad(
         icon = Icons.Filled.Bolt,
         accentColor = GoldenHour,
         onClick = onKickTap,
-        width = 60.dp,
-        height = 52.dp,
+        modifier = Modifier.hudElementOffset(HudElementId.KICK, hudConfig, containerWidthPx, containerHeightPx),
+        width = (60f * kickScale).dp,
+        height = (52f * kickScale).dp,
         testTagName = "kick_button",
       )
       TapControlButton(
@@ -329,22 +407,24 @@ fun OnFootActionPad(
         icon = Icons.Filled.SportsMma,
         accentColor = NeonPink,
         onClick = onPunchTap,
-        width = 66.dp,
-        height = 52.dp,
+        modifier = Modifier.hudElementOffset(HudElementId.PUNCH, hudConfig, containerWidthPx, containerHeightPx),
+        width = (66f * punchScale).dp,
+        height = (52f * punchScale).dp,
         testTagName = "punch_button",
       )
     }
 
     // Lower Action Row: SCOPE + SHOOT (when gun equipped) · JUMP · SPRINT
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
       if (equippedWeapon != WeaponType.FISTS) {
         TapControlButton(
           label = if (isScoped) "UNSCOPE" else "SCOPE",
           icon = Icons.Filled.CenterFocusStrong,
           accentColor = if (isScoped) GoldenHour else ElectricCyan,
           onClick = onScopeToggleTap,
-          width = 64.dp,
-          height = 58.dp,
+          modifier = Modifier.hudElementOffset(HudElementId.SCOPE, hudConfig, containerWidthPx, containerHeightPx),
+          width = (64f * scopeScale).dp,
+          height = (58f * scopeScale).dp,
           testTagName = "scope_button",
         )
         HoldControlButton(
@@ -352,8 +432,9 @@ fun OnFootActionPad(
           icon = Icons.Filled.GpsFixed,
           accentColor = SunsetCoral,
           onPressChange = onFireChange,
-          width = 72.dp,
-          height = 58.dp,
+          modifier = Modifier.hudElementOffset(HudElementId.SHOOT, hudConfig, containerWidthPx, containerHeightPx),
+          width = (72f * shootScale).dp,
+          height = (58f * shootScale).dp,
           testTagName = "fire_button",
         )
       }
@@ -362,17 +443,20 @@ fun OnFootActionPad(
         icon = Icons.Filled.ArrowUpward,
         accentColor = ElectricCyan,
         onClick = onJumpTap,
-        width = 58.dp,
-        height = 58.dp,
+        modifier = Modifier.hudElementOffset(HudElementId.JUMP, hudConfig, containerWidthPx, containerHeightPx),
+        width = (58f * jumpScale).dp,
+        height = (58f * jumpScale).dp,
         testTagName = "jump_button",
       )
-      HoldControlButton(
-        label = "SPRINT",
+      TapControlButton(
+        label = if (isAutoSprinting) "RUNNING" else "SPRINT",
         icon = Icons.AutoMirrored.Filled.DirectionsRun,
-        accentColor = NeonPink,
-        onPressChange = onSprintChange,
-        width = 62.dp,
-        height = 58.dp,
+        accentColor = if (isAutoSprinting) PalmMint else NeonPink,
+        onClick = onSprintToggleTap,
+        modifier = Modifier.hudElementOffset(HudElementId.SPRINT, hudConfig, containerWidthPx, containerHeightPx),
+        width = (64f * sprintScale).dp,
+        height = (58f * sprintScale).dp,
+        isActive = isAutoSprinting,
         testTagName = "sprint_button",
       )
     }
@@ -384,15 +468,23 @@ fun DrivingControlsLeft(
   onSteerLeft: (Boolean) -> Unit,
   onSteerRight: (Boolean) -> Unit,
   modifier: Modifier = Modifier,
+  compactScale: Float = 1f,
+  hudConfig: HudLayoutConfig = HudLayoutConfig.DEFAULT,
+  containerWidthPx: Float = 0f,
+  containerHeightPx: Float = 0f,
 ) {
-  Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = modifier) {
+  val driveScale = compactScale * hudConfig.effectiveScale(HudElementId.DRIVING_PAD)
+  Row(
+    horizontalArrangement = Arrangement.spacedBy((12f * driveScale).dp),
+    modifier = modifier.hudElementOffset(HudElementId.DRIVING_PAD, hudConfig, containerWidthPx, containerHeightPx),
+  ) {
     HoldControlButton(
       label = "LEFT",
       icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
       accentColor = ElectricCyan,
       onPressChange = onSteerLeft,
-      width = 74.dp,
-      height = 72.dp,
+      width = (74f * driveScale).dp,
+      height = (72f * driveScale).dp,
       testTagName = "steer_left_button",
     )
     HoldControlButton(
@@ -400,8 +492,8 @@ fun DrivingControlsLeft(
       icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
       accentColor = ElectricCyan,
       onPressChange = onSteerRight,
-      width = 74.dp,
-      height = 72.dp,
+      width = (74f * driveScale).dp,
+      height = (72f * driveScale).dp,
       testTagName = "steer_right_button",
     )
   }
@@ -417,39 +509,45 @@ fun DrivingControlsRight(
   onDriftChange: (Boolean) -> Unit,
   onExitCarTap: () -> Unit,
   modifier: Modifier = Modifier,
+  compactScale: Float = 1f,
+  hudConfig: HudLayoutConfig = HudLayoutConfig.DEFAULT,
+  containerWidthPx: Float = 0f,
+  containerHeightPx: Float = 0f,
 ) {
+  val driveScale = compactScale * hudConfig.effectiveScale(HudElementId.DRIVING_PEDALS)
+  val gap = (10f * driveScale).dp
   Column(
     horizontalAlignment = Alignment.End,
-    verticalArrangement = Arrangement.spacedBy(10.dp),
-    modifier = modifier,
+    verticalArrangement = Arrangement.spacedBy(gap),
+    modifier = modifier.hudElementOffset(HudElementId.DRIVING_PEDALS, hudConfig, containerWidthPx, containerHeightPx),
   ) {
     Row(
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      horizontalArrangement = Arrangement.spacedBy((8f * compactScale).dp),
     ) {
       Box(
         modifier =
-          Modifier.clip(RoundedCornerShape(14.dp))
+          Modifier.clip(RoundedCornerShape(10.dp))
             .background(ViceSurface.copy(alpha = 0.85f))
             .border(
               1.dp,
               if (isDrifting) NeonPink else ElectricCyan.copy(alpha = 0.5f),
-              RoundedCornerShape(14.dp),
+              RoundedCornerShape(10.dp),
             )
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .padding(horizontal = (10f * compactScale).dp, vertical = (5f * compactScale).dp)
       ) {
         Row(verticalAlignment = Alignment.Bottom) {
           Text(
             text = "$speedKmh",
-            style = MaterialTheme.typography.headlineMedium,
+            style = MaterialTheme.typography.headlineMedium.copy(fontSize = (22f * compactScale).sp),
             color = if (isDrifting) NeonPink else ElectricCyan,
           )
           Spacer(modifier = Modifier.width(4.dp))
           Text(
             text = if (isDrifting && !isBoat) "DRIFT" else if (isBoat) "KNOTS" else "KM/H",
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = (10f * compactScale).coerceAtLeast(8f).sp),
             color = TextPrimary.copy(alpha = 0.85f),
-            modifier = Modifier.padding(bottom = 4.dp),
+            modifier = Modifier.padding(bottom = 2.dp),
           )
         }
       }
@@ -459,20 +557,20 @@ fun DrivingControlsRight(
         icon = Icons.AutoMirrored.Filled.ExitToApp,
         accentColor = SunsetCoral,
         onClick = onExitCarTap,
-        width = 64.dp,
-        height = 52.dp,
+        width = (64f * driveScale).dp,
+        height = (52f * driveScale).dp,
         testTagName = "exit_car_button",
       )
     }
 
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
+    Row(horizontalArrangement = Arrangement.spacedBy(gap), verticalAlignment = Alignment.Bottom) {
       HoldControlButton(
         label = if (isBoat) "TURN+" else "DRIFT",
         icon = Icons.Filled.Speed,
         accentColor = GoldenHour,
         onPressChange = onDriftChange,
-        width = 62.dp,
-        height = 64.dp,
+        width = (62f * driveScale).dp,
+        height = (64f * driveScale).dp,
         testTagName = "drift_button",
       )
       HoldControlButton(
@@ -480,8 +578,8 @@ fun DrivingControlsRight(
         icon = Icons.Filled.ArrowUpward,
         accentColor = SunsetCoral,
         onPressChange = onBrakeChange,
-        width = 62.dp,
-        height = 72.dp,
+        width = (62f * driveScale).dp,
+        height = (72f * driveScale).dp,
         testTagName = "brake_button",
       )
       HoldControlButton(
@@ -489,8 +587,8 @@ fun DrivingControlsRight(
         icon = Icons.Filled.ArrowUpward,
         accentColor = if (isBoat) PalmMint else NeonPink,
         onPressChange = onGasChange,
-        width = 78.dp,
-        height = 92.dp,
+        width = (78f * driveScale).dp,
+        height = (92f * driveScale).dp,
         testTagName = "gas_button",
       )
     }
@@ -505,18 +603,23 @@ fun AirborneDropActionPad(
   onJumpFromPlaneTap: () -> Unit,
   onDeployChuteTap: () -> Unit,
   modifier: Modifier = Modifier,
+  compactScale: Float = 1f,
+  hudConfig: HudLayoutConfig = HudLayoutConfig.DEFAULT,
+  containerWidthPx: Float = 0f,
+  containerHeightPx: Float = 0f,
 ) {
+  val dropScale = compactScale * hudConfig.effectiveScale(HudElementId.JUMP)
   Column(
     horizontalAlignment = Alignment.End,
-    verticalArrangement = Arrangement.spacedBy(8.dp),
-    modifier = modifier,
+    verticalArrangement = Arrangement.spacedBy((8f * dropScale).dp),
+    modifier = modifier.hudElementOffset(HudElementId.JUMP, hudConfig, containerWidthPx, containerHeightPx),
   ) {
     Box(
       modifier =
-        Modifier.clip(RoundedCornerShape(12.dp))
+        Modifier.clip(RoundedCornerShape(10.dp))
           .background(ViceSurface.copy(alpha = 0.86f))
-          .border(1.2.dp, ElectricCyan.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
-          .padding(horizontal = 12.dp, vertical = 6.dp)
+          .border(1.dp, ElectricCyan.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
+          .padding(horizontal = (10f * dropScale).dp, vertical = (5f * dropScale).dp)
     ) {
       val statusText =
         when (dropPhase) {
@@ -527,7 +630,7 @@ fun AirborneDropActionPad(
         }
       Text(
         text = statusText,
-        style = MaterialTheme.typography.labelSmall,
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = (10f * dropScale).coerceAtLeast(8.5f).sp),
         color = if (dropPhase == DropPhase.AIRPLANE) GoldenHour else PalmMint,
       )
     }
@@ -539,8 +642,8 @@ fun AirborneDropActionPad(
           icon = Icons.Filled.FlightTakeoff,
           accentColor = NeonPink,
           onClick = onJumpFromPlaneTap,
-          width = 112.dp,
-          height = 76.dp,
+          width = (112f * dropScale).dp,
+          height = (76f * dropScale).dp,
           testTagName = "plane_jump_button",
         )
       }
@@ -550,24 +653,24 @@ fun AirborneDropActionPad(
           icon = Icons.Filled.Paragliding,
           accentColor = ElectricCyan,
           onClick = onDeployChuteTap,
-          width = 118.dp,
-          height = 76.dp,
+          width = (118f * dropScale).dp,
+          height = (76f * dropScale).dp,
           testTagName = "deploy_chute_button",
         )
       }
       DropPhase.PARACHUTE -> {
         Box(
           modifier =
-            Modifier.clip(RoundedCornerShape(16.dp))
+            Modifier.clip(RoundedCornerShape(12.dp))
               .background(PalmMint.copy(alpha = 0.22f))
-              .border(1.5.dp, PalmMint, RoundedCornerShape(16.dp))
-              .padding(horizontal = 14.dp, vertical = 12.dp)
+              .border(1.2.dp, PalmMint, RoundedCornerShape(12.dp))
+              .padding(horizontal = (12f * compactScale).dp, vertical = (10f * compactScale).dp)
               .testTag("parachute_glide_badge")
         ) {
           Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.Paragliding, contentDescription = "Parachute Glide", tint = PalmMint, modifier = Modifier.size(22.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("STEER LANDING", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+            Icon(Icons.Filled.Paragliding, contentDescription = "Parachute Glide", tint = PalmMint, modifier = Modifier.size((20f * compactScale).dp))
+            Spacer(modifier = Modifier.width(5.dp))
+            Text("STEER LANDING", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp), color = TextPrimary)
           }
         }
       }
@@ -585,22 +688,25 @@ fun TapControlButton(
   modifier: Modifier = Modifier,
   width: Dp = 68.dp,
   height: Dp = 68.dp,
+  isActive: Boolean = false,
   testTagName: String = "",
 ) {
   var pressed by remember { mutableStateOf(false) }
+  val isCompact = height < 52.dp || width < 52.dp
+  val lit = pressed || isActive
 
   Box(
     modifier =
       modifier
         .size(width = width, height = height)
-        .clip(RoundedCornerShape(18.dp))
+        .clip(RoundedCornerShape(if (isCompact) 12.dp else 18.dp))
         .background(
-          if (pressed) accentColor.copy(alpha = 0.42f) else ViceSurface.copy(alpha = 0.80f)
+          if (lit) accentColor.copy(alpha = 0.42f) else ViceSurface.copy(alpha = 0.80f)
         )
         .border(
-          width = 1.4.dp,
-          color = accentColor.copy(alpha = if (pressed) 1f else 0.65f),
-          shape = RoundedCornerShape(18.dp),
+          width = if (isActive) 1.8.dp else 1.2.dp,
+          color = accentColor.copy(alpha = if (lit) 1f else 0.65f),
+          shape = RoundedCornerShape(if (isCompact) 12.dp else 18.dp),
         )
         .then(if (testTagName.isNotEmpty()) Modifier.testTag(testTagName) else Modifier)
         .pointerInput(onClick) {
@@ -625,17 +731,20 @@ fun TapControlButton(
     contentAlignment = Alignment.Center,
   ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+      val iconDp = (minOf(width.value, height.value) * 0.34f).coerceIn(10f, 34f).dp
+      val labelSp = (minOf(width.value, height.value) * 0.175f).coerceIn(6.8f, 14f).sp
       Icon(
         imageVector = icon,
         contentDescription = label,
-        tint = if (pressed) Color.White else accentColor,
-        modifier = Modifier.size(20.dp),
+        tint = if (lit) Color.White else accentColor,
+        modifier = Modifier.size(iconDp),
       )
-      Spacer(modifier = Modifier.height(2.dp))
+      Spacer(modifier = Modifier.height(if (isCompact) 1.dp else 2.dp))
       Text(
         text = label,
-        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = labelSp),
         color = TextPrimary,
+        maxLines = 1,
       )
     }
   }

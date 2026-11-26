@@ -105,6 +105,78 @@ enum class NpcReactionState {
   KNOCKED_DOWN,
 }
 
+enum class LootCategory {
+  CURRENCY,
+  MEDICAL,
+  WEAPON,
+  VEST,
+  HELMET,
+  GLOO_WALL,
+}
+
+enum class LootItemKind(
+  val displayName: String,
+  val shortLabel: String,
+  val category: LootCategory,
+  val weapon: WeaponType? = null,
+  val armorLevel: Int = 0,
+  val maxDurability: Float = 0f,
+  val healAmount: Float = 0f,
+  val coinValue: Int = 0,
+) {
+  COIN("GOLD COIN", "$50", LootCategory.CURRENCY, coinValue = 50),
+  MEDKIT("MEDKIT", "+65 HP", LootCategory.MEDICAL, healAmount = 65f),
+  GLOO_WALL("GLOO WALL", "GLOO", LootCategory.GLOO_WALL),
+  PISTOL_9MM("9MM PISTOL", "PISTOL", LootCategory.WEAPON, weapon = WeaponType.PISTOL_9MM),
+  SMG_MICRO("MICRO SMG", "SMG", LootCategory.WEAPON, weapon = WeaponType.SMG_MICRO),
+  SHOTGUN("COMBAT SHOTGUN", "SHOTGUN", LootCategory.WEAPON, weapon = WeaponType.SHOTGUN),
+  SNIPER_RIFLE("LONGSHOT .50", "SNIPER", LootCategory.WEAPON, weapon = WeaponType.SNIPER_RIFLE),
+  ASSAULT_RIFLE("V-47 RIFLE", "RIFLE", LootCategory.WEAPON, weapon = WeaponType.ASSAULT_RIFLE),
+  VEST_LV3("LV.3 KEVLAR VEST", "VEST LV3", LootCategory.VEST, armorLevel = 3, maxDurability = 100f),
+  VEST_LV4("LV.4 TITAN VEST", "VEST LV4", LootCategory.VEST, armorLevel = 4, maxDurability = 150f),
+  HELMET_LV3("LV.3 SPEC HELMET", "HELM LV3", LootCategory.HELMET, armorLevel = 3, maxDurability = 85f),
+  HELMET_LV4("LV.4 GOLD HELMET", "HELM LV4", LootCategory.HELMET, armorLevel = 4, maxDurability = 125f),
+}
+
+enum class BotTacticalMode {
+  LOOTING,
+  ROAMING,
+  TAKING_COVER,
+  HEALING,
+  FIGHTING,
+  DRIVING_CAR,
+}
+
+data class GlooWallState(
+  val id: String,
+  val ownerId: String,
+  var x: Float,
+  var y: Float,
+  var z: Float,
+  val yawRad: Float,
+  var hp: Float = 240f,
+  val maxHp: Float = 240f,
+  var ageSec: Float = 0f,
+  val durationSec: Float = 18f,
+  val isPlayerOwned: Boolean = false,
+)
+
+data class WorldLootItem(
+  val uid: String,
+  val kind: LootItemKind,
+  var x: Float,
+  var y: Float,
+  var z: Float,
+  val houseId: String? = null,
+  var pickupCooldownSec: Float = 0f,
+)
+
+data class BagItem(
+  val uid: String,
+  val kind: LootItemKind,
+  val durability: Float = kind.maxDurability,
+)
+
 data class BulletProjectileState(
   var x: Float,
   var y: Float,
@@ -119,6 +191,11 @@ data class BulletProjectileState(
   val knockback: Float,
   var remainingDist: Float,
   var ageSec: Float = 0f,
+  val fromEnemy: Boolean = false,
+  val fromPlayer: Boolean = !fromEnemy,
+  val attackerId: String? = null,
+  val attackerName: String? = null,
+  val attackerWeapon: WeaponType = WeaponType.FISTS,
 )
 
 data class HitSparkState(
@@ -135,6 +212,7 @@ data class VehicleRuntimeState(
   val displayName: String,
   var x: Float,
   var z: Float,
+  var y: Float = 0f,
   var yawRad: Float,
   val bodyColor: FloatArray,
   val trimColor: FloatArray,
@@ -155,6 +233,7 @@ data class VehicleRuntimeState(
   var rollRad: Float = 0f,
   var isBraking: Boolean = false,
   var isDrifting: Boolean = false,
+  var driverBotId: String? = null,
 )
 
 data class BoatRuntimeState(
@@ -219,6 +298,34 @@ data class PedestrianRuntimeState(
   var friendSlot: Int = 0,
   var sitProgress: Float = 0f,
   var isHostileTarget: Boolean = false,
+  val isRivalFighter: Boolean = false,
+  var weapon: WeaponType = WeaponType.FISTS,
+  var vestLevel: Int = 0,
+  var vestDurability: Float = 0f,
+  var helmetLevel: Int = 0,
+  var helmetDurability: Float = 0f,
+  val isBrBot: Boolean = true,
+  var botMode: BotTacticalMode = BotTacticalMode.ROAMING,
+  var botMedkits: Int = if (isRivalFighter) 2 else 0,
+  var botGlooWalls: Int = if (isRivalFighter) 2 else 1,
+  var botBagCount: Int = if (isRivalFighter) 3 else 0,
+  var healTimerSec: Float = 0f,
+  var glooWallCooldownSec: Float = 0f,
+  var coverX: Float = spawnX,
+  var coverZ: Float = spawnZ,
+  var coverTimerSec: Float = 0f,
+  var strafeDirSign: Float = 1f,
+  var strafeFlipTimerSec: Float = 0f,
+  var targetEnemyBotId: String? = null,
+  var targetPlayer: Boolean = false,
+  var targetLootUid: String? = null,
+  var drivingVehicleId: String? = null,
+  var driveTimerSec: Float = 0f,
+  var vehicleCooldownSec: Float = 0f,
+  var roamTargetX: Float = spawnX,
+  var roamTargetZ: Float = spawnZ,
+  var roamRefreshSec: Float = 0f,
+  var gracePeriodSec: Float = 0f,
 )
 
 data class EjectedNpcState(
@@ -263,10 +370,10 @@ enum class LobbyDropZone(
   val spawnPlaneX: Float,
   val spawnPlaneZ: Float,
 ) {
-  FULL_WORLD("BR BATTLE DROP", "All 3 Islands", -196f, -18f),
-  KEY_BAYSIDE("BAYSIDE CLASH", "Key Bayside", -110f, -14f),
-  GREEN_VALLEY("ENCLAVE ROYALE", "Green Valley", 42f, -14f),
-  ROOFTOP_TOWN("PARKOUR DROP", "Rooftop Town", -240f, -14f),
+  FULL_WORLD("NEXTERA DROP", "Full Island", -210f, -18f),
+  KEY_BAYSIDE("FARMTOPIA DROP", "Farmtopia", -148f, 6f),
+  GREEN_VALLEY("INTELLECT DROP", "Intellect Ctr", -130f, -150f),
+  ROOFTOP_TOWN("RUST TOWN DROP", "Rust & Mortar", 40f, -20f),
 }
 
 data class LobbySquadMember(
@@ -337,6 +444,7 @@ data class HudSnapshot(
   val cameraYawRad: Float = 0f,
   val speedKmh: Int = 0,
   val isSprinting: Boolean = false,
+  val isAutoSprinting: Boolean = false,
   val isDrifting: Boolean = false,
   val activeVehicleName: String? = null,
   val nearbyVehicleName: String? = null,
@@ -344,7 +452,7 @@ data class HudSnapshot(
   val nearbyBoatName: String? = null,
   val nearbyBoatOccupied: Boolean = false,
   val insideHouseName: String? = null,
-  val zoneName: String = "KEY BAYSIDE",
+  val zoneName: String = "FARMTOPIA",
   val timePreset: TimeOfDayPreset = TimeOfDayPreset.SUNSET,
   val cameraMode: CameraDistanceMode = CameraDistanceMode.STANDARD,
   val isMuted: Boolean = false,
@@ -352,13 +460,61 @@ data class HudSnapshot(
   val boatsMapPos: List<Triple<String, Float, Float>> = emptyList(),
   val pedestriansMapPos: List<Triple<Float, Float, Boolean>> = emptyList(),
   val friendsMapPos: List<Pair<Float, Float>> = emptyList(),
-  val gunShopMapPos: Pair<Float, Float> = Pair(27.5f, -2.0f),
+  val gunShopMapPos: Pair<Float, Float> = Pair(-46f, -14f),
+  val isBagOpen: Boolean = false,
+  val bagItems: List<BagItem> = emptyList(),
+  val bagCapacity: Int = 8,
+  val isBagFull: Boolean = false,
+  val medkitCount: Int = 0,
+  val vestLevel: Int = 0,
+  val vestDurability: Int = 0,
+  val vestMaxDurability: Int = 0,
+  val helmetLevel: Int = 0,
+  val helmetDurability: Int = 0,
+  val helmetMaxDurability: Int = 0,
+  val nearbyLootLabel: String? = null,
+  val lootMapPos: List<Triple<Float, Float, LootCategory>> = emptyList(),
+  val rivalsMapPos: List<Pair<Float, Float>> = emptyList(),
+  val isPlayerEliminated: Boolean = false,
+  val isSpectatingKiller: Boolean = false,
+  val eliminatedByName: String? = null,
+  val eliminatedByWeapon: WeaponType = WeaponType.FISTS,
+  val spectatingTargetName: String? = null,
+  val spectatingTargetHp: Int = 0,
+  val spectatingTargetWeapon: WeaponType = WeaponType.FISTS,
+  val lastMatchCoinsEarned: Int = 0,
+  val isStyleShopOpen: Boolean = false,
+  val equippedCloth: ClothStyle = ClothStyle.PRESET_DEFAULT,
+  val ownedCloths: Set<ClothStyle> = setOf(ClothStyle.PRESET_DEFAULT),
+  val equippedHair: HairCustomization = HairCustomization.PRESET_DEFAULT,
+  val ownedHairs: Set<HairCustomization> = setOf(HairCustomization.PRESET_DEFAULT),
+  val equippedPants: PantsStyle = PantsStyle.PRESET_DEFAULT,
+  val ownedPants: Set<PantsStyle> = setOf(PantsStyle.PRESET_DEFAULT),
+  val equippedGunSkin: GunSkin = GunSkin.STANDARD_STEEL,
+  val ownedGunSkins: Set<GunSkin> = setOf(GunSkin.STANDARD_STEEL),
+  val equippedCarSkin: CarSkin = CarSkin.FACTORY_DEFAULT,
+  val ownedCarSkins: Set<CarSkin> = setOf(CarSkin.FACTORY_DEFAULT),
+  val weatherMode: WeatherMode = WeatherMode.CLEAR_BREEZE,
+  val autoWeatherCycle: Boolean = false,
+  val rainIntensity: Float = 0f,
+  val lightningFlash: Float = 0f,
+  val nearbyMarketStallLabel: String? = null,
+  val marketBotSummary: String? = null,
+  val trainMapPos: Pair<Float, Float>? = null,
+  val helicoptersMapPos: List<Pair<Float, Float>> = emptyList(),
+  val marketMapPos: Pair<Float, Float> = Pair(-50f, 24f),
+  val waterfallMapPos: Pair<Float, Float> = Pair(-48f, -104f),
+  val atollMapPos: Pair<Float, Float> = Pair(-218f, 6f),
+  val glooWallCount: Int = 0,
+  val glooWallsMapPos: List<Pair<Float, Float>> = emptyList(),
+  val aliveBotsCount: Int = 0,
 )
 
 class InputState {
   @Volatile var moveX: Float = 0f
   @Volatile var moveY: Float = 0f
   @Volatile var sprintHeld: Boolean = false
+  @Volatile var autoSprint: Boolean = false
   @Volatile var jumpQueued: Boolean = false
   @Volatile var climbQueued: Boolean = false
   @Volatile var punchQueued: Boolean = false

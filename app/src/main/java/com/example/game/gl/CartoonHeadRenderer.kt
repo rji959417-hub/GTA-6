@@ -46,6 +46,7 @@ internal class CartoonHeadRenderer(
     uEmissive: Int,
     uMetallic: Int,
     uRoughness: Int,
+    helmetLevel: Int = 0,
   ) {
     // Organic neck + pivoting articulated head transform
     Matrix.setIdentityM(tmpMat, 0)
@@ -228,8 +229,68 @@ internal class CartoonHeadRenderer(
       )
     }
 
-    // 8. Sculpted Hair / Hat Styles (100% organic curved spikes & shells — zero boxes!)
-    drawHairOrHat(rx, ry, rz, sx, sy, sz, appearance, uModel, uBaseColor, uMaterialType, uRoughness)
+    // 8. Sculpted Hair / Hat Styles (100% organic curved spikes & shells) + Lv.3/4 Combat Helmet
+    if (helmetLevel < 3 || appearance.hairStyle == HairStyle.BALD_FRINGE) {
+      drawHairOrHat(rx, ry, rz, sx, sy, sz, appearance, uModel, uBaseColor, uMaterialType, uRoughness)
+    }
+    if (helmetLevel >= 3) {
+      drawCombatHelmet(
+        rx = rx,
+        ry = ry,
+        rz = rz,
+        sx = sx,
+        sy = sy,
+        sz = sz,
+        helmetLevel = helmetLevel,
+        uModel = uModel,
+        uBaseColor = uBaseColor,
+        uMaterialType = uMaterialType,
+        uEmissive = uEmissive,
+        uMetallic = uMetallic,
+        uRoughness = uRoughness,
+      )
+    }
+  }
+
+  private fun drawCombatHelmet(
+    rx: Float,
+    ry: Float,
+    rz: Float,
+    sx: Float,
+    sy: Float,
+    sz: Float,
+    helmetLevel: Int,
+    uModel: Int,
+    uBaseColor: Int,
+    uMaterialType: Int,
+    uEmissive: Int,
+    uMetallic: Int,
+    uRoughness: Int,
+  ) {
+    val isLv4 = helmetLevel >= 4
+    val shellColor = if (isLv4) floatArrayOf(0.11f, 0.12f, 0.16f) else floatArrayOf(0.18f, 0.22f, 0.29f)
+    val accentColor = if (isLv4) floatArrayOf(1.0f, 0.78f, 0.22f) else floatArrayOf(0.18f, 0.90f, 0.98f)
+
+    // Ballistic helmet dome + rear nape guard
+    GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
+    GLES20.glUniform1f(uEmissive, 0f)
+    GLES20.glUniform1f(uMetallic, if (isLv4) 0.78f else 0.56f)
+    GLES20.glUniform1f(uRoughness, 0.24f)
+    GLES20.glUniform3fv(uBaseColor, 1, shellColor, 0)
+    drawPart(headRoot, 0f, ry * 0.42f, -0.02f, sx * 1.18f, sy * 0.72f, sz * 1.20f, uModel, meshes.sphereMesh)
+    drawPart(headRoot, 0f, ry * 0.06f, -rz * 0.62f, sx * 0.96f, sy * 0.42f, sz * 0.56f, uModel, meshes.sphereMesh)
+    // Ear armor cheek guards
+    for (side in listOf(-1f, 1f)) {
+      drawPart(headRoot, side * rx * 1.02f, 0f, -0.02f, 0.11f, 0.22f, 0.22f, uModel, meshes.sphereMesh)
+    }
+
+    // Glowing Tactical Brow Crest & Combat Visor
+    GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+    GLES20.glUniform1f(uEmissive, 0.75f)
+    GLES20.glUniform3fv(uBaseColor, 1, accentColor, 0)
+    drawRotatedPart(headRoot, 0f, ry * 0.46f, rz * 0.86f, 12f, 0f, 0f, sx * 0.92f, 0.055f, 0.18f, uModel, meshes.capsuleMesh)
+    drawPart(headRoot, 0f, ry * 0.72f, -0.02f, 0.08f, 0.10f, sz * 0.94f, uModel, meshes.boxMesh)
+    GLES20.glUniform1f(uEmissive, 0f)
   }
 
   private fun drawHairOrHat(
@@ -304,6 +365,25 @@ internal class CartoonHeadRenderer(
         drawPart(headRoot, 0f, ry * 0.66f, -0.01f, sx * 1.08f, 0.15f, sz * 1.10f, uModel, meshes.capsuleMesh)
         GLES20.glUniform3fv(uBaseColor, 1, darkInk, 0)
         drawRotatedPart(headRoot, 0f, ry * 0.48f, rz * 0.84f, 14f, 0f, 0f, sx * 0.88f, 0.045f, 0.22f, uModel, meshes.sphereMesh)
+      }
+      HairStyle.SPIKY_CROWN -> {
+        drawPart(headRoot, 0f, ry * 0.50f, -0.02f, sx * 1.04f, sy * 0.48f, sz * 1.04f, uModel, meshes.sphereMesh)
+        val crownAngles = listOf(0f, 45f, 90f, 135f, 180f, 225f, 270f, 315f)
+        for ((idx, deg) in crownAngles.withIndex()) {
+          val rad = Math.toRadians(deg.toDouble()).toFloat()
+          val px = sin(rad) * (rx * 0.58f)
+          val pz = cos(rad) * (rz * 0.58f)
+          val spikeLen = if (idx % 2 == 0) 0.24f else 0.19f
+          drawRotatedPart(headRoot, px, ry * 0.68f, pz, -36f, deg, 0f, 0.11f, 0.11f, spikeLen, uModel, meshes.hairSpikeMesh)
+        }
+        drawRotatedPart(headRoot, 0f, ry * 0.86f, 0f, -72f, 0f, 0f, 0.13f, 0.13f, 0.25f, uModel, meshes.hairSpikeMesh)
+      }
+      HairStyle.MOHAWK_NEON -> {
+        val finZs = listOf(0.46f, 0.24f, 0.02f, -0.22f, -0.46f)
+        for ((idx, zFrac) in finZs.withIndex()) {
+          val pitch = -74f + idx * 14f
+          drawRotatedPart(headRoot, 0f, ry * 0.72f, rz * zFrac, pitch, 0f, 0f, 0.10f, 0.15f, 0.26f, uModel, meshes.hairSpikeMesh)
+        }
       }
     }
   }

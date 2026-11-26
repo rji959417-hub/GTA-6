@@ -11,6 +11,8 @@ enum class HairStyle {
   SWOOP_TOP,
   ROUND_AFRO,
   CAP_HAT,
+  SPIKY_CROWN,
+  MOHAWK_NEON,
 }
 
 data class CharacterAppearance(
