@@ -7,12 +7,17 @@ import android.opengl.GLES20
 import android.opengl.GLUtils
 import android.opengl.Matrix
 import android.util.Log
+import com.example.game.state.CombatMoveType
+import com.example.game.state.LandingReactionType
+import com.example.game.state.ParkourActionType
+import com.example.game.state.WeaponType
 import com.example.game.world.MaterialSurface
 import java.io.File
 import java.nio.ByteBuffer
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
@@ -27,7 +32,60 @@ class GlbGpuModel private constructor(
     val textureId: Int,
   )
 
+  private val poseWorkspace = GlbLoader.PoseWorkspace(stats)
   private val modelMat = FloatArray(16)
+  val rightHandLocalPos: FloatArray
+    get() = poseWorkspace.rightHandPos
+
+  fun updateAnimation(
+    walkCycle: Float,
+    speedNorm: Float,
+    isSprinting: Boolean,
+    isSwimming: Boolean,
+    fallProgress: Float,
+    worldTimeSec: Float,
+    sitProgress: Float = 0f,
+    attackMove: CombatMoveType? = null,
+    attackProgress: Float = 0f,
+    equippedWeapon: WeaponType = WeaponType.FISTS,
+    aimNorm: Float = 0f,
+    muzzleFlash: Float = 0f,
+    isSkydiving: Boolean = false,
+    isParachuting: Boolean = false,
+    parkourType: ParkourActionType? = null,
+    parkourProgress: Float = 0f,
+    airborneFallNorm: Float = 0f,
+    landingReaction: LandingReactionType? = null,
+    landingProgress: Float = 0f,
+  ) {
+    if (!stats.rig.hasLocomotionRig) return
+    val pose =
+      buildHumanoidPose(
+        walkCycle = walkCycle,
+        speedNorm = speedNorm,
+        isSprinting = isSprinting,
+        isSwimming = isSwimming,
+        fallProgress = fallProgress,
+        worldTimeSec = worldTimeSec,
+        sitProgress = sitProgress,
+        attackMove = attackMove,
+        attackProgress = attackProgress,
+        equippedWeapon = equippedWeapon,
+        aimNorm = aimNorm,
+        muzzleFlash = muzzleFlash,
+        isSkydiving = isSkydiving,
+        isParachuting = isParachuting,
+        parkourType = parkourType,
+        parkourProgress = parkourProgress,
+        airborneFallNorm = airborneFallNorm,
+        landingReaction = landingReaction,
+        landingProgress = landingProgress,
+      )
+    poseWorkspace.evaluatePose(pose)
+    for (i in gpuParts.indices) {
+      gpuParts[i].mesh.updateVertices(poseWorkspace.partAnimatedVerts[i])
+    }
+  }
 
   fun drawShadow(
     baseMatrix: FloatArray,
@@ -108,61 +166,332 @@ class GlbGpuModel private constructor(
   companion object {
     private const val TAG = "ViceGlbLoader"
 
-    fun computePlayerTransform(
-      outMatrix: FloatArray,
-      x: Float,
-      y: Float,
-      z: Float,
-      yawRad: Float,
+    fun buildHumanoidPose(
       walkCycle: Float,
       speedNorm: Float,
       isSprinting: Boolean,
       isSwimming: Boolean,
       fallProgress: Float,
       worldTimeSec: Float,
-      sitProgress: Float,
-      isSkydiving: Boolean,
-      isParachuting: Boolean,
-      airborneFallNorm: Float,
-    ) {
-      val yawDeg = Math.toDegrees(yawRad.toDouble()).toFloat()
-      val clampedSpeed = speedNorm.coerceIn(0f, 1.35f) * (1f - sitProgress * 0.85f)
-      val strideAmp = clampedSpeed * (if (isSprinting) 1.15f else 0.9f)
-      val idleFactor = (1f - clampedSpeed).coerceIn(0f, 1f) * (1f - sitProgress * 0.5f)
+      sitProgress: Float = 0f,
+      attackMove: CombatMoveType? = null,
+      attackProgress: Float = 0f,
+      equippedWeapon: WeaponType = WeaponType.FISTS,
+      aimNorm: Float = 0f,
+      muzzleFlash: Float = 0f,
+      isSkydiving: Boolean = false,
+      isParachuting: Boolean = false,
+      parkourType: ParkourActionType? = null,
+      parkourProgress: Float = 0f,
+      airborneFallNorm: Float = 0f,
+      landingReaction: LandingReactionType? = null,
+      landingProgress: Float = 0f,
+    ): GlbCharacterPose {
+      val isClimbing = parkourType == ParkourActionType.CLIMB_LEDGE
+      val isVaulting = parkourType == ParkourActionType.VAULT_OVER
+      val isCombatRoll = landingReaction == LandingReactionType.COMBAT_ROLL && landingProgress < 0.96f
+      val isHardStagger = landingReaction == LandingReactionType.HARD_STAGGER
+      val isSoftLand = landingReaction == LandingReactionType.SOFT_LAND
+      val parkourP = parkourProgress.coerceIn(0f, 1f)
+      val landP = landingProgress.coerceIn(0f, 1f)
+      val staggerCurve = if (isHardStagger) sin(landP * PI.toFloat()) else 0f
+      val softLandCurve = if (isSoftLand) sin(landP * PI.toFloat()) else 0f
+      val rollCurve = if (isCombatRoll) sin(landP * PI.toFloat()) else 0f
+      val vaultCurve = if (isVaulting) sin(parkourP * PI.toFloat()) else 0f
+
+      val activeOverride = isClimbing || isVaulting || isCombatRoll || isHardStagger
+      val clampedSpeed =
+        if (activeOverride) 0f
+        else speedNorm.coerceIn(0f, 1.35f) * (1f - sitProgress * 0.9f)
+      val strideAmp = clampedSpeed * (if (isSprinting) 1.22f else 1.0f)
+      val idleFactor =
+        if (activeOverride) 0f
+        else ((1f - clampedSpeed) * (1f - sitProgress * 0.5f)).coerceIn(0f, 1f)
+      val strikeCurve =
+        if (attackMove != null) sin(attackProgress.coerceIn(0f, 1f) * PI.toFloat()) else 0f
       val breath = sin(worldTimeSec * 2.2f)
 
       val bounceY =
-        if (isSwimming || fallProgress > 0.1f || sitProgress > 0.1f || airborneFallNorm > 0.1f) 0f
-        else abs(sin(walkCycle)) * 0.055f * strideAmp
-      val crouchScaleY = 1f - sitProgress * 0.30f
-      val crouchScaleXZ = 1f + sitProgress * 0.06f
-      val breathScaleY = 1f + breath * 0.008f * idleFactor
+        if (isSwimming || fallProgress > 0.1f || sitProgress > 0.1f || activeOverride || airborneFallNorm > 0.1f) 0f
+        else abs(sin(walkCycle)) * 0.048f * strideAmp + breath * 0.006f * idleFactor
+      val pelvisSwayX = cos(walkCycle) * 0.024f * strideAmp + sin(worldTimeSec * 0.9f) * 0.014f * idleFactor
+      val pelvisRollDeg =
+        cos(walkCycle) * 3.2f * strideAmp +
+          sin(worldTimeSec * 0.9f) * 1.4f * idleFactor +
+          (if (isVaulting) 20f * vaultCurve else 0f) +
+          (if (attackMove == CombatMoveType.KICK_ROUNDHOUSE) -16f * strikeCurve else 0f)
+      val pelvisYawDeg =
+        -sin(walkCycle) * 7.5f * strideAmp +
+          (if (attackMove == CombatMoveType.KICK_ROUNDHOUSE) -46f * strikeCurve else 0f)
 
-      val pitchDeg =
+      val attackTorsoYaw =
+        when (attackMove) {
+          CombatMoveType.PUNCH_JAB -> -26f * strikeCurve
+          CombatMoveType.PUNCH_HOOK -> -48f * strikeCurve
+          CombatMoveType.PUNCH_UPPERCUT -> -22f * strikeCurve
+          CombatMoveType.KICK_FRONT -> 12f * strikeCurve
+          CombatMoveType.KICK_ROUNDHOUSE -> 32f * strikeCurve
+          null -> 0f
+        }
+      val torsoYawDeg = sin(walkCycle) * 14.0f * strideAmp + attackTorsoYaw
+
+      val torsoLeanDeg =
         when {
-          fallProgress > 0.05f -> -fallProgress * 86f
-          isSkydiving -> 68f + sin(worldTimeSec * 4.5f) * 3.5f
-          isParachuting -> 8f
-          isSwimming -> 52f
-          isSprinting -> 10f
-          clampedSpeed > 0.15f -> 4.5f * clampedSpeed
+          fallProgress > 0.01f -> 0f
+          isSkydiving -> 14f
+          isParachuting -> 8f + sin(worldTimeSec * 2.2f) * 3f
+          isClimbing -> if (parkourP <= 0.45f) 10f + (parkourP / 0.45f) * 18f else 28f * (1f - ((parkourP - 0.45f) / 0.55f))
+          isVaulting -> 34f * vaultCurve
+          isHardStagger -> 36f * staggerCurve
+          airborneFallNorm > 0.05f -> -10f * airborneFallNorm
+          isSwimming -> 18f
+          attackMove == CombatMoveType.PUNCH_UPPERCUT -> 10f * strikeCurve
+          attackMove != null && attackMove.isKick -> -14f * strikeCurve
+          sitProgress > 0.05f -> 4.5f * sitProgress + breath * 0.8f
+          isSprinting -> 13f
+          clampedSpeed > 0.1f -> 4.2f * clampedSpeed
+          aimNorm > 0.05f -> 6f * aimNorm
+          else -> 1.2f + breath * 1.0f + 11f * softLandCurve
+        }
+
+      val rootPitchDeg =
+        when {
+          fallProgress > 0.01f -> -fallProgress * 86f
+          isSkydiving -> 68f + sin(worldTimeSec * 4.5f) * 4f
+          isSwimming -> 44f
           else -> 0f
         }
-      val rollDeg =
-        if (fallProgress > 0.05f) 0f
-        else cos(walkCycle) * 2.8f * strideAmp + sin(worldTimeSec * 0.9f) * 1.1f * idleFactor
-      val swayYawDeg = -sin(walkCycle) * 4.5f * strideAmp
+
+      // Legs (phase L = walkCycle, R = walkCycle + PI)
+      fun calcLeg(phase: Float, isRight: Boolean): Triple<Float, Float, Float> {
+        var thighPitch: Float
+        var kneeBend: Float
+        when {
+          fallProgress > 0.1f -> {
+            thighPitch = -24f * fallProgress
+            kneeBend = 34f * fallProgress
+          }
+          isSkydiving -> {
+            val s = if (isRight) 1f else -1f
+            thighPitch = 16f + sin(worldTimeSec * 6.5f + s * 1.4f) * 14f
+            kneeBend = 38f + cos(worldTimeSec * 6.5f + s) * 14f
+          }
+          isParachuting -> {
+            val s = if (isRight) 1f else -1f
+            thighPitch = -14f + sin(worldTimeSec * 2.5f + s) * 7f
+            kneeBend = 24f + cos(worldTimeSec * 2.1f) * 5f
+          }
+          isCombatRoll -> {
+            thighPitch = -86f * rollCurve
+            kneeBend = 104f * rollCurve
+          }
+          isHardStagger -> {
+            val s = if (isRight) 1f else -1f
+            thighPitch = (-14f + s * 18f) * staggerCurve
+            kneeBend = 42f * staggerCurve
+          }
+          isClimbing -> {
+            thighPitch =
+              if (parkourP <= 0.45f) {
+                val t = (parkourP / 0.45f).coerceIn(0f, 1f)
+                if (isRight) -84f * t else 14f - 38f * t
+              } else {
+                val t = ((parkourP - 0.45f) / 0.55f).coerceIn(0f, 1f)
+                if (isRight) -84f * (1f - t) else -24f * (1f - t)
+              }
+            kneeBend =
+              if (parkourP <= 0.45f) {
+                val t = (parkourP / 0.45f).coerceIn(0f, 1f)
+                if (isRight) 94f * t else 28f * t
+              } else {
+                val t = ((parkourP - 0.45f) / 0.55f).coerceIn(0f, 1f)
+                if (isRight) 94f * (1f - t) else 28f * (1f - t)
+              }
+          }
+          isVaulting -> {
+            thighPitch = -74f * vaultCurve
+            kneeBend = 100f * vaultCurve
+          }
+          airborneFallNorm > 0.05f -> {
+            val s = if (isRight) 1f else -1f
+            val cycle = sin(worldTimeSec * 12f + s * 1.8f) * 14f
+            thighPitch = -30f * airborneFallNorm + cycle * airborneFallNorm
+            kneeBend = 48f * airborneFallNorm
+          }
+          isSwimming -> {
+            thighPitch = -sin(phase) * 28f
+            kneeBend = max(6f, cos(phase) * 32f + 12f)
+          }
+          attackMove == CombatMoveType.KICK_FRONT && isRight -> {
+            thighPitch = -98f * strikeCurve
+            kneeBend = max(4f, 52f * (1f - strikeCurve))
+          }
+          attackMove == CombatMoveType.KICK_ROUNDHOUSE && isRight -> {
+            thighPitch = -88f * strikeCurve
+            kneeBend = max(6f, 38f * (1f - strikeCurve * 0.85f))
+          }
+          else -> {
+            thighPitch = -sin(phase) * 33f * strideAmp
+            val swingLift = max(0f, (cos(phase) + 0.30f) / 1.30f)
+            kneeBend = 4.5f + swingLift * 48f * strideAmp + 32f * softLandCurve
+          }
+        }
+        val sitThigh = -84f
+        val sitKnee = 86f
+        val finalThigh = thighPitch * (1f - sitProgress) + sitThigh * sitProgress
+        val finalKnee = kneeBend * (1f - sitProgress) + sitKnee * sitProgress
+        val ankle = ((-finalThigh * 0.28f - finalKnee * 0.44f) * (1f - sitProgress)).coerceIn(-24f, 26f)
+        return Triple(finalThigh, finalKnee, ankle)
+      }
+
+      val (lThigh, lKnee, lAnkle) = calcLeg(walkCycle, isRight = false)
+      val (rThigh, rKnee, rAnkle) = calcLeg(walkCycle + PI.toFloat(), isRight = true)
+      val rThighOut = if (attackMove == CombatMoveType.KICK_ROUNDHOUSE) 34f * strikeCurve else 0f
+
+      // Arms (opposite swing to legs: L arm swings opposite to L leg -> +sin(walkCycle))
+      fun calcArm(legPhase: Float, isRight: Boolean): Triple<Float, Float, Float> {
+        var armPitch: Float
+        var armOut = 3f
+        var forearmBend: Float
+        val forwardSwing = max(0f, -sin(legPhase + PI.toFloat()))
+        when {
+          fallProgress > 0.1f -> {
+            armPitch = -20f * fallProgress
+            armOut = 18f * fallProgress
+            forearmBend = -18f * fallProgress
+          }
+          isSkydiving -> {
+            val s = if (isRight) 1f else -1f
+            armPitch = -32f + sin(worldTimeSec * 5.2f + s) * 14f
+            armOut = 42f
+            forearmBend = -28f
+          }
+          isParachuting -> {
+            armPitch = -112f
+            armOut = 26f
+            forearmBend = -22f
+          }
+          isCombatRoll -> {
+            armPitch = -64f * rollCurve
+            forearmBend = -84f * rollCurve
+          }
+          isSwimming -> {
+            armPitch = -sin(legPhase) * 48f - 36f
+            armOut = 22f
+            forearmBend = -24f
+          }
+          attackMove == CombatMoveType.PUNCH_JAB && isRight -> {
+            armPitch = -88f * strikeCurve
+            forearmBend = -8f
+          }
+          attackMove == CombatMoveType.PUNCH_HOOK && !isRight -> {
+            armPitch = -76f * strikeCurve
+            armOut = 26f * strikeCurve
+            forearmBend = -58f * strikeCurve
+          }
+          attackMove == CombatMoveType.PUNCH_UPPERCUT && isRight -> {
+            armPitch = -96f * strikeCurve
+            forearmBend = -68f * strikeCurve
+          }
+          else -> {
+            armPitch = sin(legPhase) * 34f * strideAmp + breath * 1.4f * idleFactor
+            forearmBend = -12f - 30f * strideAmp - forwardSwing * 24f * strideAmp
+          }
+        }
+
+        // Aim or gun carry override on right arm (plus left support when aiming)
+        if (equippedWeapon != WeaponType.FISTS && fallProgress < 0.1f && !isSkydiving && !isParachuting && !isCombatRoll) {
+          val recoil = muzzleFlash * 10f
+          if (isRight) {
+            val carryPitch = -38f + sin(walkCycle) * 8f * strideAmp
+            val carryBend = -54f
+            val aimPitch = -84f + recoil
+            val aimBend = -16f - recoil * 0.5f
+            val aimBlend = aimNorm.coerceIn(0f, 1f)
+            armPitch = carryPitch * (1f - aimBlend) + aimPitch * aimBlend
+            forearmBend = carryBend * (1f - aimBlend) + aimBend * aimBlend
+            armOut = 4f
+          } else if (aimNorm > 0.1f) {
+            val aimBlend = aimNorm.coerceIn(0f, 1f)
+            armPitch = armPitch * (1f - aimBlend) + (-72f) * aimBlend
+            forearmBend = forearmBend * (1f - aimBlend) + (-44f) * aimBlend
+          }
+        }
+
+        if (sitProgress > 0.05f && !isRight && aimNorm < 0.1f) {
+          armPitch = armPitch * (1f - sitProgress) + (-36f) * sitProgress
+          forearmBend = forearmBend * (1f - sitProgress) + (-48f) * sitProgress
+        }
+
+        return Triple(armPitch, armOut, forearmBend)
+      }
+
+      val (lArm, lOut, lForearm) = calcArm(walkCycle, isRight = false)
+      val (rArm, rOut, rForearm) = calcArm(walkCycle + PI.toFloat(), isRight = true)
+
+      return GlbCharacterPose(
+        pelvisBounceY = bounceY,
+        pelvisSwayX = pelvisSwayX,
+        pelvisYawDeg = pelvisYawDeg,
+        pelvisRollDeg = pelvisRollDeg,
+        rootPitchDeg = rootPitchDeg,
+        torsoYawDeg = torsoYawDeg,
+        torsoLeanDeg = torsoLeanDeg,
+        headPitchDeg = sin(worldTimeSec * 1.4f) * 1.6f * idleFactor - (if (isSkydiving) 45f else 0f),
+        headYawDeg = -torsoYawDeg * 0.45f,
+        leftThighPitchDeg = lThigh,
+        leftKneeBendDeg = lKnee,
+        leftAnklePitchDeg = lAnkle,
+        rightThighPitchDeg = rThigh,
+        rightThighOutDeg = rThighOut,
+        rightKneeBendDeg = rKnee,
+        rightAnklePitchDeg = rAnkle,
+        leftArmPitchDeg = lArm,
+        leftArmOutDeg = lOut,
+        leftForearmBendDeg = lForearm,
+        rightArmPitchDeg = rArm,
+        rightArmOutDeg = rOut,
+        rightForearmBendDeg = rForearm,
+      )
+    }
+
+    fun computePlayerTransform(
+      outMatrix: FloatArray,
+      x: Float,
+      y: Float,
+      z: Float,
+      yawRad: Float,
+      fallProgress: Float,
+      sitProgress: Float,
+      landingReaction: LandingReactionType? = null,
+      landingProgress: Float = 0f,
+      hasSkeletalRig: Boolean = true,
+      walkCycle: Float = 0f,
+      speedNorm: Float = 0f,
+      isSprinting: Boolean = false,
+    ) {
+      val yawDeg = Math.toDegrees(yawRad.toDouble()).toFloat()
+      val isCombatRoll = landingReaction == LandingReactionType.COMBAT_ROLL && landingProgress < 0.96f
+      val landP = landingProgress.coerceIn(0f, 1f)
+      val rollCurve = if (isCombatRoll) sin(landP * PI.toFloat()) else 0f
+      val sitDropY = sitProgress * 0.34f * (1f - fallProgress)
+      val rollDropY = rollCurve * 0.28f
+      val fallOffsetY = fallProgress * 0.16f
+      val rigidBounceY =
+        if (hasSkeletalRig || fallProgress > 0.1f || sitProgress > 0.1f) 0f
+        else abs(sin(walkCycle)) * 0.055f * speedNorm.coerceIn(0f, 1.35f) * (if (isSprinting) 1.15f else 0.9f)
 
       Matrix.setIdentityM(outMatrix, 0)
-      Matrix.translateM(outMatrix, 0, x, y + bounceY + fallProgress * 0.14f, z)
-      Matrix.rotateM(outMatrix, 0, yawDeg + swayYawDeg, 0f, 1f, 0f)
-      if (abs(pitchDeg) > 0.05f) {
-        Matrix.rotateM(outMatrix, 0, pitchDeg, 1f, 0f, 0f)
+      Matrix.translateM(outMatrix, 0, x, y + rigidBounceY + fallOffsetY - sitDropY - rollDropY, z)
+      Matrix.rotateM(outMatrix, 0, yawDeg, 0f, 1f, 0f)
+      if (isCombatRoll) {
+        Matrix.translateM(outMatrix, 0, 0f, 0.72f, 0f)
+        Matrix.rotateM(outMatrix, 0, landP * 360f, 1f, 0f, 0f)
+        Matrix.translateM(outMatrix, 0, 0f, -0.72f, 0f)
       }
-      if (abs(rollDeg) > 0.05f) {
-        Matrix.rotateM(outMatrix, 0, rollDeg, 0f, 0f, 1f)
+      if (!hasSkeletalRig && fallProgress > 0.05f) {
+        Matrix.rotateM(outMatrix, 0, -fallProgress * 86f, 1f, 0f, 0f)
       }
-      Matrix.scaleM(outMatrix, 0, crouchScaleXZ, crouchScaleY * breathScaleY, crouchScaleXZ)
     }
 
     fun tryLoadFromAssets(
@@ -211,12 +540,13 @@ class GlbGpuModel private constructor(
 
       return try {
         val parsed = GlbLoader.parseGlbBytes(bytes, targetHeightMeters = targetHeightMeters)
+        val isDynamic = parsed.rig.hasLocomotionRig
         val texIds = IntArray(parsed.images.size) { idx -> uploadImageTexture(parsed.images[idx]) }
         val gpuParts =
           parsed.parts.map { part ->
             val texId = texIds.getOrElse(part.material.baseColorImageIndex) { 0 }
             GpuPart(
-              mesh = Mesh(part.vertices, part.indices),
+              mesh = Mesh(part.vertices, part.indices, isDynamic = isDynamic),
               material = part.material,
               textureId = texId,
             )
@@ -224,8 +554,8 @@ class GlbGpuModel private constructor(
         Log.i(
           TAG,
           "Loaded $sourceLabel: ${parsed.parts.size} parts, ${parsed.totalTriangles} tris, " +
-            "scale=${"%.4f".format(parsed.appliedScale)}, minY=${parsed.normalizedBounds.minY}, " +
-            "height=${"%.2f".format(parsed.normalizedBounds.height)}m",
+            "rig=${parsed.rig.hasLocomotionRig}, rotated180Y=${parsed.rotated180Y}, " +
+            "minY=${parsed.normalizedBounds.minY}, height=${"%.2f".format(parsed.normalizedBounds.height)}m",
         )
         GlbGpuModel(gpuParts, texIds, parsed)
       } catch (t: Throwable) {

@@ -3,6 +3,7 @@ package com.example.game.gl
 import android.opengl.GLES20
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.FloatBuffer
 
 /**
  * Interleaved VBO/EBO mesh with layout:
@@ -10,10 +11,15 @@ import java.nio.ByteOrder
  * location 1: vec3 normal
  * location 2: vec2 texcoord
  */
-class Mesh(vertices: FloatArray, indices: ShortArray) {
+class Mesh(
+  vertices: FloatArray,
+  indices: ShortArray,
+  private val isDynamic: Boolean = false,
+) {
   private val vboId: Int
   private val eboId: Int
   private val indexCount: Int = indices.size
+  private var vBuf: FloatBuffer
 
   init {
     val bufs = IntArray(2)
@@ -21,11 +27,11 @@ class Mesh(vertices: FloatArray, indices: ShortArray) {
     vboId = bufs[0]
     eboId = bufs[1]
 
-    val vBuf =
+    vBuf =
       ByteBuffer.allocateDirect(vertices.size * 4)
         .order(ByteOrder.nativeOrder())
         .asFloatBuffer()
-        .put(vertices)
+    vBuf.put(vertices)
     vBuf.position(0)
 
     val iBuf =
@@ -35,8 +41,9 @@ class Mesh(vertices: FloatArray, indices: ShortArray) {
         .put(indices)
     iBuf.position(0)
 
+    val vUsage = if (isDynamic) GLES20.GL_DYNAMIC_DRAW else GLES20.GL_STATIC_DRAW
     GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboId)
-    GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, vertices.size * 4, vBuf, GLES20.GL_STATIC_DRAW)
+    GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, vertices.size * 4, vBuf, vUsage)
 
     GLES20.glBindBuffer(GLES20.GL_ELEMENT_ARRAY_BUFFER, eboId)
     GLES20.glBufferData(
@@ -48,6 +55,22 @@ class Mesh(vertices: FloatArray, indices: ShortArray) {
 
     GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
     GLES20.glBindBuffer(GLES20.GL_ELEMENT_ARRAY_BUFFER, 0)
+  }
+
+  fun updateVertices(vertices: FloatArray) {
+    if (vboId == 0 || !isDynamic) return
+    if (vBuf.capacity() < vertices.size) {
+      vBuf =
+        ByteBuffer.allocateDirect(vertices.size * 4)
+          .order(ByteOrder.nativeOrder())
+          .asFloatBuffer()
+    }
+    vBuf.clear()
+    vBuf.put(vertices)
+    vBuf.position(0)
+    GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboId)
+    GLES20.glBufferSubData(GLES20.GL_ARRAY_BUFFER, 0, vertices.size * 4, vBuf)
+    GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
   }
 
   fun draw() {
@@ -68,4 +91,3 @@ class Mesh(vertices: FloatArray, indices: ShortArray) {
     GLES20.glDeleteBuffers(2, intArrayOf(vboId, eboId), 0)
   }
 }
-

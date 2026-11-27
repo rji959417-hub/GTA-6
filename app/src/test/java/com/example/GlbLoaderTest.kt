@@ -1,7 +1,9 @@
 package com.example
 
+import com.example.game.gl.GlbGpuModel
 import com.example.game.gl.GlbLoader
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
@@ -13,7 +15,7 @@ class GlbLoaderTest {
   fun parseGlbBytesNormalizesScaleAndGroundsCharacterToZeroY() {
     val glb = buildSyntheticCharacterGlb(
       rawMinY = -2.0f,
-      rawMaxY = 6.0f, // raw height = 8.0 units -> with node scale 0.5 => 4.0 units -> normalized to 1.76m
+      rawMaxY = 6.0f,
       nodeScale = 0.5f,
       nodeTranslationY = 5.0f,
     )
@@ -33,13 +35,56 @@ class GlbLoaderTest {
     assertTrue((parsed.images[0].encodedBytes?.size ?: 0) == 4)
   }
 
+  @Test
+  fun realCyberpunkCharacterGlbStandsUprightFacesForwardAndAnimatesRunStride() {
+    val file =
+      listOf(
+        File("public/assets/aistudio/cyberpunk_character.glb"),
+        File("../public/assets/aistudio/cyberpunk_character.glb"),
+      ).firstOrNull { it.isFile } ?: return
+
+    val parsed = GlbLoader.parseGlbBytes(file.readBytes(), targetHeightMeters = 1.76f)
+
+    // 1. Stands upright on +Y (not lying flat along Z!) and sits flush on y = 0
+    assertEquals(0f, parsed.normalizedBounds.minY, 0.01f)
+    assertEquals(1.76f, parsed.normalizedBounds.maxY, 0.01f)
+    assertTrue("Height must clearly exceed Z depth so character stands upright", parsed.normalizedBounds.height > parsed.normalizedBounds.depth * 2.0f)
+    assertTrue("Character must be rotated +Z forward", parsed.rotated180Y)
+
+    // 2. Humanoid locomotion bones detected
+    assertTrue(parsed.rig.hasLocomotionRig)
+    assertTrue(parsed.rig.hips >= 0)
+    assertTrue(parsed.rig.leftThigh >= 0 && parsed.rig.rightThigh >= 0)
+    assertTrue(parsed.rig.leftArm >= 0 && parsed.rig.rightArm >= 0)
+
+    // 3. Toes face +Z in bind pose after normalization
+    val lFootZ = parsed.nodes[parsed.rig.leftFoot].bindPosZ
+    val lToesZ = parsed.nodes[parsed.rig.leftToes].bindPosZ
+    assertTrue("Toes ($lToesZ) should point +Z ahead of heel ($lFootZ)", lToesZ > lFootZ + 0.05f)
+
+    // 4. Running sprint pose swings left & right feet in opposite Z directions
+    val ws = GlbLoader.PoseWorkspace(parsed)
+    val runPose =
+      GlbGpuModel.buildHumanoidPose(
+        walkCycle = kotlin.math.PI.toFloat() * 0.5f,
+        speedNorm = 1.25f,
+        isSprinting = true,
+        isSwimming = false,
+        fallProgress = 0f,
+        worldTimeSec = 1.0f,
+      )
+    ws.evaluatePose(runPose)
+    val lFootRunZ = ws.nodeAnimMats[parsed.rig.leftFoot][14]
+    val rFootRunZ = ws.nodeAnimMats[parsed.rig.rightFoot][14]
+    assertTrue("Left foot should swing forward (+Z) and right foot backward (-Z) at walkCycle=PI/2: L=$lFootRunZ R=$rFootRunZ", lFootRunZ > rFootRunZ + 0.35f)
+  }
+
   private fun buildSyntheticCharacterGlb(
     rawMinY: Float,
     rawMaxY: Float,
     nodeScale: Float,
     nodeTranslationY: Float,
   ): ByteArray {
-    // 3 vertices (pos vec3 + uv vec2) + 3 unsigned short indices + 4-byte dummy image payload
     val positions = floatArrayOf(
       1.0f, rawMinY, 2.0f,
       3.0f, rawMinY, 2.0f,
@@ -60,7 +105,6 @@ class GlbLoaderTest {
     for (f in uvs) binBuf.putFloat(f)
     val idxOffset = binBuf.position()
     for (s in indices) binBuf.putShort(s)
-    // Pad indices to 4-byte boundary (6 bytes -> +2 bytes)
     binBuf.putShort(0)
     val imgOffset = binBuf.position()
     binBuf.put(fakePng)
@@ -103,17 +147,17 @@ class GlbLoaderTest {
       out.write((v ushr 24) and 0xFF)
     }
 
-    putIntLE(0x46546C67) // glTF
+    putIntLE(0x46546C67)
     putIntLE(2)
     putIntLE(totalLen)
 
     putIntLE(jsonPaddedLen)
-    putIntLE(0x4E4F534A) // JSON
+    putIntLE(0x4E4F534A)
     out.write(jsonBytesRaw)
     repeat(jsonPaddedLen - jsonBytesRaw.size) { out.write(' '.code) }
 
     putIntLE(binPaddedLen)
-    putIntLE(0x004E4942) // BIN\0
+    putIntLE(0x004E4942)
     out.write(binBytes)
     repeat(binPaddedLen - binBytes.size) { out.write(0) }
 
