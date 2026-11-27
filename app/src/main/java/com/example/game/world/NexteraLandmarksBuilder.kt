@@ -542,8 +542,9 @@ object NexteraLandmarksBuilder {
       for (h in houses) {
         if (abs(tx - h.centerX) < h.width * 0.65f + 5f && abs(tz - h.centerZ) < h.depth * 0.65f + 5f) return false
       }
-      // Keep Farmtopia barn/market/gun shop open
+      // Keep Farmtopia barn/market/gun shop/Police Station open
       if (hypot(tx + 72f, tz - 6f) < 15f || hypot(tx + 50f, tz - 24f) < 12f || hypot(tx + 46f, tz + 14f) < 10f) return false
+      if (hypot(tx + 12f, tz - 44f) < 22f) return false
       if (hypot(tx + 178f, tz + 80f) < 16f || hypot(tx + 158f, tz - 168f) < 22f || hypot(tx - 24f, tz - 172f) < 18f) return false
       if (hypot(tx + 18f, tz + 180f) < 22f) return false
       return true

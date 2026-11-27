@@ -135,6 +135,124 @@ object WorldBuilder {
       )
   }
 
+  /**
+   * Builds a large 2-story Nextera Police Station headquarters facing North (-Z toward Central Highway),
+   * complete with stepped stone portico, glass lobby windows, glowing POLICE marquee, twin red & blue
+   * rooftop beacons, walkable helipad roof with exterior stairs, and an East patrol cruiser bay.
+   */
+  internal fun buildPoliceStation(
+    cx: Float,
+    cz: Float,
+    staticBoxes: MutableList<PropBoxSpec>,
+    staticCylinders: MutableList<PropCylinderSpec>,
+    glassBoxes: MutableList<PropBoxSpec>,
+    aabbs: MutableList<AabbCollider>,
+    walkableFloors: MutableList<WalkableFloorSpec>,
+  ) {
+    val stoneLight = floatArrayOf(0.86f, 0.88f, 0.92f)
+    val precinctNavy = floatArrayOf(0.11f, 0.21f, 0.42f)
+    val darkSlate = floatArrayOf(0.18f, 0.20f, 0.25f)
+    val concretePlinth = floatArrayOf(0.36f, 0.38f, 0.43f)
+    val policeBlueGlow = floatArrayOf(0.14f, 0.56f, 1.0f)
+    val sirenRed = floatArrayOf(1.0f, 0.14f, 0.20f)
+    val goldBadge = floatArrayOf(0.96f, 0.78f, 0.22f)
+    val steelStair = floatArrayOf(0.46f, 0.50f, 0.56f)
+
+    // 1. Wide Concrete Precinct Forecourt & Patrol Cruiser Parking Apron
+    staticBoxes += PropBoxSpec(cx + 2.0f, 0.06f, cz - 1.5f, 34f, 0.12f, 24f, concretePlinth, MaterialSurface.ASPHALT, castShadow = false)
+    walkableFloors += WalkableFloorSpec(cx - 15f, cz - 13.5f, cx + 19f, cz + 10.5f, 0.12f, tag = "Police Station Plaza")
+
+    // East Patrol Cruiser Parking Bay Markings
+    for (bx in listOf(cx + 11.4f, cx + 16.2f)) {
+      staticBoxes += PropBoxSpec(bx, 0.125f, cz - 7.8f, 0.18f, 0.02f, 6.2f, policeBlueGlow, MaterialSurface.EMISSIVE, emissive = 0.55f, castShadow = false)
+      staticBoxes += PropBoxSpec(bx + 2.3f, 0.125f, cz - 4.7f, 4.6f, 0.02f, 0.18f, goldBadge, MaterialSurface.EMISSIVE, emissive = 0.45f, castShadow = false)
+    }
+
+    // 2. Main 2-Story Precinct Headquarters Mass (20m wide x 12.6m deep x 7.4m tall, centered at cz + 3.5)
+    val bCz = cz + 3.5f
+    val bw = 20f
+    val bd = 12.6f
+    val hbw = bw * 0.5f
+    val hbd = bd * 0.5f
+    val wallH = 7.4f
+
+    // Raised precinct podium floor + monumental North entry steps
+    staticBoxes += PropBoxSpec(cx, 0.24f, bCz, bw + 1.2f, 0.24f, bd + 2.6f, stoneLight, MaterialSurface.TILE)
+    walkableFloors += WalkableFloorSpec(cx - hbw - 0.6f, bCz - hbd - 1.3f, cx + hbw + 0.6f, bCz + hbd + 1.3f, 0.36f, tag = "Police Station Podium")
+    staticBoxes += PropBoxSpec(cx, 0.18f, bCz - hbd - 1.85f, 9.2f, 0.14f, 1.4f, stoneLight, MaterialSurface.TILE)
+
+    // Solid outer structural wings (leaving grand open recessed front vestibule in middle 5.4m facing North -Z)
+    val leftWingW = 7.2f
+    val rightWingW = 7.2f
+    staticBoxes += PropBoxSpec(cx - hbw + leftWingW * 0.5f, 0.36f + wallH * 0.5f, bCz, leftWingW, wallH, bd, stoneLight, MaterialSurface.STUCCO)
+    staticBoxes += PropBoxSpec(cx + hbw - rightWingW * 0.5f, 0.36f + wallH * 0.5f, bCz, rightWingW, wallH, bd, stoneLight, MaterialSurface.STUCCO)
+    aabbs += AabbCollider(cx - hbw, bCz - hbd, cx - 2.8f, bCz + hbd, 0f, wallH + 0.6f, "Police HQ West Wing")
+    aabbs += AabbCollider(cx + 2.8f, bCz - hbd, cx + hbw, bCz + hbd, 0f, wallH + 0.6f, "Police HQ East Wing")
+
+    // Center Back Hall + Upper 2nd Story Bridge over Lobby Entryway (allows entering front desk lobby!)
+    staticBoxes += PropBoxSpec(cx, 0.36f + wallH * 0.5f, bCz + 2.6f, 5.8f, wallH, bd - 5.2f, stoneLight, MaterialSurface.STUCCO)
+    aabbs += AabbCollider(cx - 2.9f, bCz - 1.2f, cx + 2.9f, bCz + hbd, 0f, wallH + 0.6f, "Police HQ Center Core")
+    staticBoxes += PropBoxSpec(cx, 3.8f + (wallH - 3.44f) * 0.5f, bCz - hbd + 2.6f, 5.8f, wallH - 3.44f, 5.2f, precinctNavy, MaterialSurface.STUCCO)
+
+    // Front Desk Counter & Dispatch Screen inside Recessed Lobby
+    staticBoxes += PropBoxSpec(cx, 0.92f, bCz - 2.2f, 4.4f, 1.12f, 0.85f, darkSlate, MaterialSurface.WOOD)
+    aabbs += AabbCollider(cx - 2.2f, bCz - 2.65f, cx + 2.2f, bCz - 1.75f, 0f, 1.5f, "Police Dispatch Desk")
+    staticBoxes += PropBoxSpec(cx, 2.25f, bCz - 1.32f, 3.4f, 1.05f, 0.14f, policeBlueGlow, MaterialSurface.EMISSIVE, emissive = 0.85f, castShadow = false)
+
+    // Deep Navy Police Banding & Cornice Trim around 2nd Story
+    staticBoxes += PropBoxSpec(cx, 4.15f, bCz - hbd - 0.08f, bw + 0.3f, 0.72f, 0.22f, precinctNavy, MaterialSurface.STUCCO)
+    staticBoxes += PropBoxSpec(cx, 4.15f, bCz + hbd + 0.08f, bw + 0.3f, 0.72f, 0.22f, precinctNavy, MaterialSurface.STUCCO)
+    staticBoxes += PropBoxSpec(cx - hbw - 0.08f, 4.15f, bCz, 0.22f, 0.72f, bd + 0.3f, precinctNavy, MaterialSurface.STUCCO)
+    staticBoxes += PropBoxSpec(cx + hbw + 0.08f, 4.15f, bCz, 0.22f, 0.72f, bd + 0.3f, precinctNavy, MaterialSurface.STUCCO)
+
+    // Illuminated Front & Side Glass Windows (Ground + 2F)
+    for (wx in listOf(cx - 7.8f, cx - 4.8f, cx + 4.8f, cx + 7.8f)) {
+      glassBoxes += PropBoxSpec(wx, 2.2f, bCz - hbd - 0.04f, 2.1f, 1.65f, 0.16f, floatArrayOf(0.45f, 0.78f, 0.98f), MaterialSurface.GLASS, castShadow = false)
+      glassBoxes += PropBoxSpec(wx, 5.75f, bCz - hbd - 0.04f, 2.1f, 1.75f, 0.16f, floatArrayOf(0.45f, 0.78f, 0.98f), MaterialSurface.GLASS, castShadow = false)
+    }
+
+    // Grand Front Portico Columns & Canopy overhanging North entrance
+    val porticoZ = bCz - hbd - 1.15f
+    staticBoxes += PropBoxSpec(cx, 3.92f, porticoZ, 9.4f, 0.42f, 2.6f, precinctNavy, MaterialSurface.SLATE)
+    for (px in listOf(cx - 4.1f, cx - 2.3f, cx + 2.3f, cx + 4.1f)) {
+      staticCylinders += PropCylinderSpec(px, 2.14f, porticoZ - 0.95f, 0.26f, 3.55f, stoneLight, MaterialSurface.STUCCO)
+    }
+
+    // 3. Walkable Rooftop Helipad Deck & Parapet
+    val roofY = 0.36f + wallH
+    staticBoxes += PropBoxSpec(cx, roofY + 0.20f, bCz, bw + 0.8f, 0.40f, bd + 0.8f, darkSlate, MaterialSurface.SLATE)
+    walkableFloors += WalkableFloorSpec(cx - hbw - 0.4f, bCz - hbd - 0.4f, cx + hbw + 0.4f, bCz + hbd + 0.4f, roofY + 0.40f, tag = "Police HQ Rooftop")
+
+    // Helipad "H" & Gold Ring on Roof
+    staticCylinders += PropCylinderSpec(cx, roofY + 0.41f, bCz + 0.8f, 3.8f, 0.04f, floatArrayOf(0.24f, 0.27f, 0.33f), MaterialSurface.ASPHALT)
+    staticBoxes += PropBoxSpec(cx - 1.1f, roofY + 0.435f, bCz + 0.8f, 0.42f, 0.03f, 3.2f, goldBadge, MaterialSurface.EMISSIVE, emissive = 0.55f, castShadow = false)
+    staticBoxes += PropBoxSpec(cx + 1.1f, roofY + 0.435f, bCz + 0.8f, 0.42f, 0.03f, 3.2f, goldBadge, MaterialSurface.EMISSIVE, emissive = 0.55f, castShadow = false)
+    staticBoxes += PropBoxSpec(cx, roofY + 0.435f, bCz + 0.8f, 2.2f, 0.03f, 0.42f, goldBadge, MaterialSurface.EMISSIVE, emissive = 0.55f, castShadow = false)
+
+    // Glowing "POLICE" Roof Sign Board + Red/Blue Roof Siren Beacons + Radio Mast
+    staticBoxes += PropBoxSpec(cx, roofY + 1.25f, bCz - hbd + 0.35f, 10.6f, 1.35f, 0.42f, precinctNavy, MaterialSurface.SLATE)
+    staticBoxes += PropBoxSpec(cx, roofY + 1.25f, bCz - hbd + 0.12f, 9.6f, 0.92f, 0.18f, policeBlueGlow, MaterialSurface.EMISSIVE, emissive = 1.15f, castShadow = false)
+    staticBoxes += PropBoxSpec(cx - 4.4f, roofY + 2.20f, bCz - hbd + 0.35f, 1.25f, 0.52f, 0.52f, sirenRed, MaterialSurface.EMISSIVE, emissive = 1.45f, castShadow = false)
+    staticBoxes += PropBoxSpec(cx + 4.4f, roofY + 2.20f, bCz - hbd + 0.35f, 1.25f, 0.52f, 0.52f, policeBlueGlow, MaterialSurface.EMISSIVE, emissive = 1.45f, castShadow = false)
+    staticCylinders += PropCylinderSpec(cx + 6.8f, roofY + 2.4f, bCz + 3.2f, 0.14f, 4.2f, steelStair, MaterialSurface.SLATE, metallic = 0.7f)
+    staticBoxes += PropBoxSpec(cx + 6.8f, roofY + 4.6f, bCz + 3.2f, 0.36f, 0.36f, 0.36f, sirenRed, MaterialSurface.EMISSIVE, emissive = 1.3f, castShadow = false)
+
+    // 4. Exterior West Steel Staircase leading cleanly onto the Police HQ Rooftop
+    val stairX = cx - hbw - 1.15f
+    staticBoxes += PropBoxSpec(stairX, roofY * 0.5f + 0.18f, bCz, 2.0f, 0.24f, 10.2f, steelStair, MaterialSurface.SLATE, metallic = 0.5f)
+    walkableFloors +=
+      WalkableFloorSpec(
+        minX = stairX - 1.0f,
+        minZ = bCz - 5.1f,
+        maxX = stairX + 1.0f,
+        maxZ = bCz + 5.1f,
+        baseElevationY = 0.36f,
+        endElevationY = roofY + 0.40f,
+        rampAxis = RampAxis.POS_Z,
+        tag = "Police Roof Stairs",
+      )
+  }
+
   internal fun buildEnterableHouse(
     h: HouseSpec,
     staticBoxes: MutableList<PropBoxSpec>,

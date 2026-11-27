@@ -70,6 +70,8 @@ object TerrainHeightfield {
       RoadSeg(24f, 172f, 112f, 128f, 4.4f),
       RoadSeg(112f, 128f, 164f, 152f, 4.4f),
       RoadSeg(112f, 128f, 118f, 22f, 4.4f),
+      // Police Station Avenue connecting Central Highway (-12, 19) to Precinct Forecourt (-12, 34)
+      RoadSeg(-12f, 18.5f, -12f, 34f, 4.8f),
     )
 
   private fun hash2(ix: Int, iz: Int): Float {
@@ -213,10 +215,11 @@ object TerrainHeightfield {
       d = min(d, distToSegment(x, z, seg.x1, seg.z1, seg.x2, seg.z2) - seg.halfWidth)
     }
 
-    // Gun Shop (-46, -14), Farmtopia Produce Market (-50, 24), Player Spawn Plaza (-56, 8)
+    // Gun Shop (-46, -14), Farmtopia Produce Market (-50, 24), Player Spawn Plaza (-56, 8), Police Station (-12, 44)
     d = min(d, sdBox(x, z, -46f, -14f, 8.5f, 8.5f))
     d = min(d, sdBox(x, z, -50f, 24f, 12f, 10f))
     d = min(d, sdBox(x, z, -56f, 8f, 10f, 10f))
+    d = min(d, sdBox(x, z, -12f, 44f, 20f, 16f))
 
     // Boat Pier approach at Grav Labs / Turbine Cove (-198, 62..72)
     d = min(d, sdBox(x, z, -198f, 66f, 6f, 12f))

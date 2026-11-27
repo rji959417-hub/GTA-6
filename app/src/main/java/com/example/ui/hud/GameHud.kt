@@ -567,6 +567,37 @@ fun ViceHorizonScreen(
                 }
               }
 
+              if (hud.policeChaseActive || hud.isBeingArrestedByPolice) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier =
+                    Modifier.clip(RoundedCornerShape(10.dp))
+                      .background(Color(0xD916254A))
+                      .border(
+                        1.1.dp,
+                        if (hud.isBeingArrestedByPolice) SunsetCoral else ElectricCyan,
+                        RoundedCornerShape(10.dp),
+                      )
+                      .padding(horizontal = 8.dp, vertical = 3.dp)
+                      .testTag("police_chase_badge"),
+                ) {
+                  Icon(
+                    Icons.Filled.Security,
+                    contentDescription = "Police Pursuit",
+                    tint = if (hud.isBeingArrestedByPolice) SunsetCoral else ElectricCyan,
+                    modifier = Modifier.size(12.dp),
+                  )
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text(
+                    text =
+                      if (hud.isBeingArrestedByPolice) "POLICE ARRESTING!"
+                      else "POLICE · ${hud.policeNearestDistMeters}m / 50m",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.ExtraBold),
+                    color = if (hud.isBeingArrestedByPolice) SunsetCoral else TextPrimary,
+                  )
+                }
+              }
+
               if (hud.friendCount > 0) {
                 Row(
                   verticalAlignment = Alignment.CenterVertically,
@@ -898,6 +929,7 @@ fun ViceHorizonScreen(
             hud.activeParkourType == ParkourActionType.VAULT_OVER -> "VAULTING BARRIER..."
             hud.activeAttackMove != null -> hud.activeAttackMove.name.replace('_', ' ')
             hud.nearbyParkourLabel != null -> "${hud.nearbyParkourLabel} · TAP CLIMB OR JUMP"
+            hud.isProne -> "PRONE · TAP SLEEP OR JUMP TO STAND"
             hud.isSitting -> "SITTING COMFORTABLY · TAP STAND OR MOVE TO GET UP"
             hud.isDriving -> "${hud.activeVehicleName ?: "VEHICLE"} · DRAG TO LOOK"
             hud.nearbyBoatName != null ->
@@ -999,6 +1031,23 @@ fun ViceHorizonScreen(
               )
             }
             else -> {
+            val sprintScale = controlScale * hudConfig.effectiveScale(HudElementId.SPRINT)
+            FreeFireCircleTapButton(
+              kind = FreeFirePostureKind.RUN,
+              onClick = {
+                sim.toggleAutoSprint()
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onHudForceRefresh()
+              },
+              modifier =
+                Modifier.align(Alignment.BottomStart)
+                  .padding(start = (joystickSize * 0.28f), bottom = joystickSize + 14.dp)
+                  .hudElementOffset(HudElementId.SPRINT, hudConfig, containerWidthPx, containerHeightPx),
+              diameter = (54f * sprintScale).dp,
+              isActive = hud.isAutoSprinting,
+              activeAccent = PalmMint,
+              testTagName = "sprint_button",
+            )
             VirtualJoystick(
               onMove = { mx, my ->
                 sim.input.moveX = mx
@@ -1020,15 +1069,10 @@ fun ViceHorizonScreen(
               nearbyFriendCandidate = hud.nearbyFriendCandidateId != null,
               nearbyParkourLabel = hud.nearbyParkourLabel,
               isSitting = hud.isSitting,
+              isProne = hud.isProne,
               isScoped = hud.isScoped,
               equippedWeapon = hud.equippedWeapon,
               glooWallCount = hud.glooWallCount,
-              isAutoSprinting = hud.isAutoSprinting,
-              onSprintToggleTap = {
-                sim.toggleAutoSprint()
-                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                onHudForceRefresh()
-              },
               onJumpTap = {
                 sim.input.jumpQueued = true
                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -1044,6 +1088,11 @@ fun ViceHorizonScreen(
               },
               onSitToggleTap = {
                 sim.toggleSit()
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onHudForceRefresh()
+              },
+              onProneToggleTap = {
+                sim.toggleProne()
                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 onHudForceRefresh()
               },
@@ -1250,6 +1299,11 @@ fun ViceHorizonScreen(
         },
         onTeleportAtoll = {
           sim.teleportToAtoll()
+          sim.isPaused = false
+          onHudForceRefresh()
+        },
+        onTeleportPoliceStation = {
+          sim.teleportToPoliceStation()
           sim.isPaused = false
           onHudForceRefresh()
         },
@@ -1467,15 +1521,18 @@ private fun EliminatedOverlay(
           .border(1.3.dp, SunsetCoral.copy(alpha = 0.75f), RoundedCornerShape(if (compactMobile) 16.dp else 22.dp))
           .padding(horizontal = if (compactMobile) 16.dp else 24.dp, vertical = if (compactMobile) 12.dp else 18.dp),
     ) {
+      val killedByPolice = (hud.eliminatedByName ?: "").contains("POLICE", ignoreCase = true)
       Text(
-        text = "YOU WERE ELIMINATED",
+        text = if (killedByPolice) "GAME OVER · CAUGHT BY POLICE" else "YOU WERE ELIMINATED",
         style =
           (if (compactMobile) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall)
             .copy(fontWeight = FontWeight.ExtraBold),
         color = SunsetCoral,
       )
       Text(
-        text = "KILLED BY ${(hud.eliminatedByName ?: "RIVAL").uppercase()} · ${hud.eliminatedByWeapon.displayName}",
+        text =
+          if (killedByPolice) "SHOT BY ${(hud.eliminatedByName ?: "POLICE").uppercase()} · ${hud.eliminatedByWeapon.displayName}"
+          else "KILLED BY ${(hud.eliminatedByName ?: "RIVAL").uppercase()} · ${hud.eliminatedByWeapon.displayName}",
         style =
           (if (compactMobile) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge)
             .copy(fontWeight = FontWeight.Bold),

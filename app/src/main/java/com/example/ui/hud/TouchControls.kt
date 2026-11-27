@@ -255,15 +255,15 @@ fun OnFootActionPad(
   nearbyFriendCandidate: Boolean,
   nearbyParkourLabel: String?,
   isSitting: Boolean,
+  isProne: Boolean = false,
   isScoped: Boolean,
   equippedWeapon: WeaponType,
   glooWallCount: Int = 0,
-  isAutoSprinting: Boolean = false,
-  onSprintToggleTap: () -> Unit = {},
   onJumpTap: () -> Unit,
   onClimbTap: () -> Unit,
   onEnterCraftTap: () -> Unit,
   onSitToggleTap: () -> Unit,
+  onProneToggleTap: () -> Unit = {},
   onBefriendTap: () -> Unit,
   onScopeToggleTap: () -> Unit,
   onPunchTap: () -> Unit,
@@ -282,12 +282,12 @@ fun OnFootActionPad(
   val ctxScale = compactScale * hudConfig.effectiveScale(HudElementId.CONTEXT_ACTION)
   val glooScale = compactScale * hudConfig.effectiveScale(HudElementId.GLOO_WALL)
   val sitScale = compactScale * hudConfig.effectiveScale(HudElementId.SIT)
+  val sleepScale = compactScale * hudConfig.effectiveScale(HudElementId.SLEEP)
   val kickScale = compactScale * hudConfig.effectiveScale(HudElementId.KICK)
   val punchScale = compactScale * hudConfig.effectiveScale(HudElementId.PUNCH)
   val scopeScale = compactScale * hudConfig.effectiveScale(HudElementId.SCOPE)
   val shootScale = compactScale * hudConfig.effectiveScale(HudElementId.SHOOT)
   val jumpScale = compactScale * hudConfig.effectiveScale(HudElementId.JUMP)
-  val sprintScale = compactScale * hudConfig.effectiveScale(HudElementId.SPRINT)
 
   Column(
     horizontalAlignment = Alignment.End,
@@ -368,8 +368,8 @@ fun OnFootActionPad(
       }
     }
 
-    // Upper Combat & Posture Row: GLOO · SIT/STAND · KICK · PUNCH
-    Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+    // Upper Combat & Jump Row: GLOO · KICK · PUNCH · JUMP (Free Fire style)
+    Row(horizontalArrangement = Arrangement.spacedBy(gap), verticalAlignment = Alignment.CenterVertically) {
       if (glooWallCount > 0) {
         TapControlButton(
           label = "GLOO×$glooWallCount",
@@ -382,16 +382,6 @@ fun OnFootActionPad(
           testTagName = "gloo_wall_button",
         )
       }
-      TapControlButton(
-        label = if (isSitting) "STAND" else "SIT",
-        icon = Icons.Filled.EventSeat,
-        accentColor = if (isSitting) PalmMint else ElectricCyan,
-        onClick = onSitToggleTap,
-        modifier = Modifier.hudElementOffset(HudElementId.SIT, hudConfig, containerWidthPx, containerHeightPx),
-        width = (60f * sitScale).dp,
-        height = (52f * sitScale).dp,
-        testTagName = "sit_button",
-      )
       TapControlButton(
         label = "KICK",
         icon = Icons.Filled.Bolt,
@@ -412,10 +402,17 @@ fun OnFootActionPad(
         height = (52f * punchScale).dp,
         testTagName = "punch_button",
       )
+      FreeFireCircleTapButton(
+        kind = FreeFirePostureKind.JUMP,
+        onClick = onJumpTap,
+        modifier = Modifier.hudElementOffset(HudElementId.JUMP, hudConfig, containerWidthPx, containerHeightPx),
+        diameter = (54f * jumpScale).dp,
+        testTagName = "jump_button",
+      )
     }
 
-    // Lower Action Row: SCOPE + SHOOT (when gun equipped) · JUMP · SPRINT
-    Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+    // Lower Action & Posture Row: SCOPE + SHOOT (when gun equipped) · SLEEP · SIT (Free Fire style)
+    Row(horizontalArrangement = Arrangement.spacedBy(gap), verticalAlignment = Alignment.CenterVertically) {
       if (equippedWeapon != WeaponType.FISTS) {
         TapControlButton(
           label = if (isScoped) "UNSCOPE" else "SCOPE",
@@ -438,26 +435,23 @@ fun OnFootActionPad(
           testTagName = "fire_button",
         )
       }
-      TapControlButton(
-        label = "JUMP",
-        icon = Icons.Filled.ArrowUpward,
-        accentColor = ElectricCyan,
-        onClick = onJumpTap,
-        modifier = Modifier.hudElementOffset(HudElementId.JUMP, hudConfig, containerWidthPx, containerHeightPx),
-        width = (58f * jumpScale).dp,
-        height = (58f * jumpScale).dp,
-        testTagName = "jump_button",
+      FreeFireCircleTapButton(
+        kind = FreeFirePostureKind.SLEEP,
+        onClick = onProneToggleTap,
+        modifier = Modifier.hudElementOffset(HudElementId.SLEEP, hudConfig, containerWidthPx, containerHeightPx),
+        diameter = (54f * sleepScale).dp,
+        isActive = isProne,
+        activeAccent = ElectricCyan,
+        testTagName = "sleep_button",
       )
-      TapControlButton(
-        label = if (isAutoSprinting) "RUNNING" else "SPRINT",
-        icon = Icons.AutoMirrored.Filled.DirectionsRun,
-        accentColor = if (isAutoSprinting) PalmMint else NeonPink,
-        onClick = onSprintToggleTap,
-        modifier = Modifier.hudElementOffset(HudElementId.SPRINT, hudConfig, containerWidthPx, containerHeightPx),
-        width = (64f * sprintScale).dp,
-        height = (58f * sprintScale).dp,
-        isActive = isAutoSprinting,
-        testTagName = "sprint_button",
+      FreeFireCircleTapButton(
+        kind = FreeFirePostureKind.SIT,
+        onClick = onSitToggleTap,
+        modifier = Modifier.hudElementOffset(HudElementId.SIT, hudConfig, containerWidthPx, containerHeightPx),
+        diameter = (54f * sitScale).dp,
+        isActive = isSitting,
+        activeAccent = PalmMint,
+        testTagName = "sit_button",
       )
     }
   }

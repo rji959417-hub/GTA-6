@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Landscape
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.ShoppingBasket
 import androidx.compose.material.icons.filled.SportsMma
 import androidx.compose.material.icons.filled.Storefront
@@ -261,6 +262,7 @@ fun PauseMapModal(
   onTeleportMarket: () -> Unit = {},
   onTeleportWaterfall: () -> Unit = {},
   onTeleportAtoll: () -> Unit = {},
+  onTeleportPoliceStation: () -> Unit = {},
   onCycleCamera: () -> Unit,
   onAirplaneDrop: () -> Unit,
   onReturnToLobby: () -> Unit = {},
@@ -352,6 +354,35 @@ fun PauseMapModal(
             }
           }
           Text("SHOP", style = MaterialTheme.typography.labelLarge, color = SunsetCoral)
+        }
+
+        // Vice PD Police Station HQ Fast Travel Card
+        Row(
+          modifier =
+            Modifier.fillMaxWidth()
+              .clip(RoundedCornerShape(14.dp))
+              .background(ViceVoid.copy(alpha = 0.65f))
+              .border(1.dp, ElectricCyan.copy(alpha = 0.65f), RoundedCornerShape(14.dp))
+              .clickable(onClick = onTeleportPoliceStation)
+              .padding(horizontal = 14.dp, vertical = 10.dp)
+              .testTag("teleport_police_station"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+              Icons.Filled.Security,
+              contentDescription = "Vice PD Police Station",
+              tint = ElectricCyan,
+              modifier = Modifier.size(22.dp),
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+              Text("Vice PD Police Station HQ", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+              Text("2-Story Precinct, Helipad Roof & Patrol Cruisers", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+            }
+          }
+          Text("POLICE HQ", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
         }
 
         houses.forEachIndexed { index, house ->

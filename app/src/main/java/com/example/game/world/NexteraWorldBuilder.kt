@@ -86,11 +86,20 @@ object NexteraWorldBuilder {
     // 3. MARINA PIER & BOAT DOCK (SW Bay near Grav Labs / Turbine Cove)
     buildMarinaBoatPier(staticBoxes, walkableFloors)
 
-    // 4. GUN SHOP (-46, -14) & FARMTOPIA PRODUCE MARKET STALLS (-50, 24)
+    // 4. GUN SHOP (-46, -14), POLICE STATION (-12, 44) & FARMTOPIA PRODUCE MARKET STALLS (-50, 24)
     WorldBuilder.buildGunShopKiosk(
       cx = -46f,
       cz = -14f,
       staticBoxes = staticBoxes,
+      glassBoxes = glassBoxes,
+      aabbs = aabbs,
+      walkableFloors = walkableFloors,
+    )
+    WorldBuilder.buildPoliceStation(
+      cx = -12f,
+      cz = 44f,
+      staticBoxes = staticBoxes,
+      staticCylinders = staticCylinders,
       glassBoxes = glassBoxes,
       aabbs = aabbs,
       walkableFloors = walkableFloors,
@@ -749,6 +758,8 @@ object NexteraWorldBuilder {
       boulders = boulders,
       windTurbines = windTurbines,
       domes = domes,
+      policeStationCenter = Pair(-12f, 44f),
+      policeStationSpawnPos = Pair(-12f, 29f),
     )
   }
 

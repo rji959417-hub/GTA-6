@@ -10,9 +10,9 @@ enum class TimeOfDayPreset(val label: String, val sunProgress: Float) {
 }
 
 enum class CameraDistanceMode(val label: String, val footDist: Float, val carDist: Float) {
-  STANDARD("STD CAM", 5.8f, 7.6f),
-  CLOSE("CLOSE CAM", 3.9f, 5.6f),
-  WIDE("WIDE CAM", 8.2f, 10.2f),
+  STANDARD("STD CAM", 2.75f, 6.8f),
+  CLOSE("CLOSE CAM", 2.15f, 5.2f),
+  WIDE("WIDE CAM", 4.4f, 9.2f),
 }
 
 enum class HitZone {
@@ -234,6 +234,9 @@ data class VehicleRuntimeState(
   var isBraking: Boolean = false,
   var isDrifting: Boolean = false,
   var driverBotId: String? = null,
+  var isPoliceCar: Boolean = false,
+  var isPoliceDispatched: Boolean = false,
+  var officerDisembarked: Boolean = false,
 )
 
 data class BoatRuntimeState(
@@ -326,6 +329,10 @@ data class PedestrianRuntimeState(
   var roamTargetZ: Float = spawnZ,
   var roamRefreshSec: Float = 0f,
   var gracePeriodSec: Float = 0f,
+  val isPoliceOfficer: Boolean = false,
+  var assignedPoliceCarId: String? = null,
+  var policeHasGunDrawn: Boolean = false,
+  var armReachNorm: Float = 0f,
 )
 
 data class EjectedNpcState(
@@ -362,6 +369,13 @@ data class CarjackSequenceState(
   val startZ: Float,
   var elapsedSec: Float = 0f,
   val durationSec: Float = 0.95f,
+)
+
+data class PoliceCaptureSequenceState(
+  val officerId: String,
+  var elapsedSec: Float = 0f,
+  val durationSec: Float = 1.25f,
+  var shotFired: Boolean = false,
 )
 
 enum class LobbyDropZone(
@@ -414,6 +428,7 @@ data class HudSnapshot(
   val isDrivingBoat: Boolean = false,
   val isSwimming: Boolean = false,
   val isSitting: Boolean = false,
+  val isProne: Boolean = false,
   val isScoped: Boolean = false,
   val isCarjacking: Boolean = false,
   val carjackTargetName: String? = null,
@@ -508,6 +523,12 @@ data class HudSnapshot(
   val glooWallCount: Int = 0,
   val glooWallsMapPos: List<Pair<Float, Float>> = emptyList(),
   val aliveBotsCount: Int = 0,
+  val policeStationMapPos: Pair<Float, Float> = Pair(-12f, 44f),
+  val policeChaseActive: Boolean = false,
+  val policeNearestDistMeters: Int = 0,
+  val policeCarsMapPos: List<Pair<Float, Float>> = emptyList(),
+  val policeOfficersMapPos: List<Pair<Float, Float>> = emptyList(),
+  val isBeingArrestedByPolice: Boolean = false,
 )
 
 class InputState {

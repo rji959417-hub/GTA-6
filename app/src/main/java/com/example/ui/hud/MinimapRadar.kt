@@ -233,6 +233,16 @@ fun MinimapRadar(
           drawCircle(color = SunsetCoral, radius = 6.5f, center = gunShopPos)
           drawCircle(color = GoldenHour, radius = 3.0f, center = gunShopPos)
 
+          // Vice PD Police Station HQ Beacon on Radar
+          val pdTl = toRadar(hud.policeStationMapPos.first - 10f, hud.policeStationMapPos.second - 6f)
+          val pdSz = Size(20f * scale, 12.6f * scale)
+          drawRect(color = Color(0xFF1E3A8A), topLeft = pdTl, size = pdSz)
+          drawRect(color = ElectricCyan, topLeft = pdTl, size = pdSz, style = Stroke(width = 1.6f))
+          val pdPos = toRadar(hud.policeStationMapPos.first, hud.policeStationMapPos.second)
+          drawCircle(color = Color(0xFF2563EB), radius = 4.5f, center = pdPos)
+          drawCircle(color = Color(0xFFEF4444), radius = 2.0f, center = Offset(pdPos.x - 2f, pdPos.y - 2f))
+          drawCircle(color = Color(0xFF38BDF8), radius = 2.0f, center = Offset(pdPos.x + 2f, pdPos.y - 2f))
+
           // Pedestrians on Radar (orange highlight when panicking/fleeing)
           for ((px, pz, panicking) in hud.pedestriansMapPos) {
             val pos = toRadar(px, pz)
@@ -285,6 +295,19 @@ fun MinimapRadar(
               }
             drawCircle(color = ViceVoid, radius = 5.2f, center = pos)
             drawCircle(color = color, radius = 3.4f, center = pos)
+          }
+
+          // Police Cruisers & Pursuing Officers on Radar (Red & Blue flashing)
+          for ((px, pz) in hud.policeCarsMapPos) {
+            val pos = toRadar(px, pz)
+            drawCircle(color = Color(0xFF1D4ED8), radius = 5.6f, center = pos)
+            drawCircle(color = Color(0xFFEF4444), radius = 2.6f, center = Offset(pos.x - 1.4f, pos.y))
+            drawCircle(color = Color(0xFF38BDF8), radius = 2.6f, center = Offset(pos.x + 1.4f, pos.y))
+          }
+          for ((ox, oz) in hud.policeOfficersMapPos) {
+            val pos = toRadar(ox, oz)
+            drawCircle(color = Color(0xFFEF4444), radius = 4.6f, center = pos)
+            drawCircle(color = Color(0xFF38BDF8), radius = 2.4f, center = pos)
           }
 
           // Boats on map

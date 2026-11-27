@@ -257,4 +257,6 @@ data class WorldData(
   val boulders: List<BoulderSpec> = emptyList(),
   val windTurbines: List<WindTurbineSpec> = emptyList(),
   val domes: List<DomeSpec> = emptyList(),
+  val policeStationCenter: Pair<Float, Float> = Pair(-12f, 44f),
+  val policeStationSpawnPos: Pair<Float, Float> = Pair(-12f, 29f),
 )

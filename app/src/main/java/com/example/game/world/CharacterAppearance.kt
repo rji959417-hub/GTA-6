@@ -191,4 +191,20 @@ object CartoonPresets {
       hasRoundGlasses = false,
       brassButtons = false,
     )
+
+  // Vice PD Police Officer (deep tactical navy uniform, badge vest, dark boots & police cap)
+  val POLICE_OFFICER =
+    CharacterAppearance(
+      build = BodyBuild.ATHLETIC_TOON,
+      hairStyle = HairStyle.CAP_HAT,
+      skinColor = floatArrayOf(0.90f, 0.67f, 0.51f),
+      tunicColor = floatArrayOf(0.11f, 0.24f, 0.48f),
+      vestColor = floatArrayOf(0.06f, 0.11f, 0.24f),
+      pantsColor = floatArrayOf(0.08f, 0.12f, 0.22f),
+      shoeColor = floatArrayOf(0.08f, 0.08f, 0.10f),
+      hairColor = floatArrayOf(0.08f, 0.15f, 0.34f),
+      hasMustache = true,
+      hasRoundGlasses = false,
+      brassButtons = true,
+    )
 }

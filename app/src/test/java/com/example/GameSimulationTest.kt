@@ -1424,4 +1424,135 @@ class GameSimulationTest {
     assertTrue("Car on Intellect Citadel plateau should sit on elevated ground (${car.y})", car.y > 2.0f)
     assertTrue("Player inside elevated car should match car elevation (${sim.playerY})", sim.playerY > 2.2f)
   }
+
+  @Test
+  fun toggleProneDropsCharacterToGroundAllowsSlowCrawlAndStandsOnJump() {
+    val sim = GameSimulation(WorldBuilder.buildKeyBayside())
+    sim.isPlaying = true
+    sim.dropPhase = DropPhase.GROUND
+    sim.teleportOnFootTo(0f, 0f, 0f)
+    repeat(5) { sim.step(0.03f) }
+
+    assertFalse(sim.isProne)
+    assertEquals(0f, sim.proneProgress, 0.001f)
+
+    assertTrue("Should go prone/sleep on dry land", sim.toggleProne())
+    assertTrue(sim.isProne)
+    assertFalse("Going prone cancels sitting", sim.isSitting)
+    repeat(20) { sim.step(0.03f) }
+    assertTrue("Prone progress should reach ~1.0", sim.proneProgress > 0.9f)
+    assertTrue("HudSnapshot reports isProne", sim.snapshotHud(isMuted = false).isProne)
+
+    val startX = sim.playerX
+    val startZ = sim.playerZ
+    sim.input.moveY = -1f
+    repeat(20) { sim.step(0.03f) }
+    assertTrue("Crawling while prone should stay prone", sim.isProne)
+    val crawlDist = CollisionSolver.distXZ(startX, startZ, sim.playerX, sim.playerZ)
+    assertTrue("Player should crawl slowly while prone (moved $crawlDist)", crawlDist in 0.4f..2.0f)
+
+    sim.input.moveY = 0f
+    sim.input.jumpQueued = true
+    repeat(20) { sim.step(0.03f) }
+    assertFalse("Jumping should stand player up from prone", sim.isProne)
+    assertTrue("Prone progress eases back to 0", sim.proneProgress < 0.25f)
+  }
+
+  @Test
+  fun closeUpCameraFramingHugsHeroInLobbyAndGameplay() {
+    val sim = GameSimulation(WorldBuilder.buildKeyBayside())
+    // Lobby close-up framing
+    sim.step(0.03f)
+    val lobbyCamDist = CollisionSolver.distXZ(sim.playerX, sim.playerZ, sim.camPos.x, sim.camPos.z)
+    assertTrue("Lobby camera should frame hero closely (dist=$lobbyCamDist)", lobbyCamDist <= 3.1f)
+
+    // Gameplay close-up framing when running
+    sim.isPlaying = true
+    sim.dropPhase = DropPhase.GROUND
+    sim.teleportOnFootTo(0f, 0f, 0f)
+    sim.input.moveY = -1f
+    repeat(40) { sim.step(0.03f) }
+    val footCamDist = CollisionSolver.distXZ(sim.playerX, sim.playerZ, sim.camPos.x, sim.camPos.z)
+    assertTrue("On-foot camera should stay close to hero screen-side (dist=$footCamDist)", footCamDist <= 3.1f)
+  }
+
+  @Test
+  fun freefallAndParachuteCamerasFrameHeroClosely() {
+    val sim = GameSimulation(WorldBuilder.buildKeyBayside())
+    sim.startAirplaneDrop()
+    assertTrue(sim.jumpFromAirplane())
+    assertEquals(DropPhase.FREEFALL, sim.dropPhase)
+    repeat(40) { sim.step(0.03f) }
+    val freefallDist = CollisionSolver.distXZ(sim.playerX, sim.playerZ, sim.camPos.x, sim.camPos.z)
+    assertTrue("Freefall camera must stay close to hero (dist=$freefallDist)", freefallDist <= 4.1f)
+
+    assertTrue(sim.deployParachute())
+    assertEquals(DropPhase.PARACHUTE, sim.dropPhase)
+    repeat(40) { sim.step(0.03f) }
+    val chuteDist = CollisionSolver.distXZ(sim.playerX, sim.playerZ, sim.camPos.x, sim.camPos.z)
+    assertTrue("Parachute camera must stay close to hero (dist=$chuteDist)", chuteDist <= 4.1f)
+  }
+
+  @Test
+  fun policeStationExistsWithCruisersAndDispatchesOnFightUntilHandCatchAndGunKill() {
+    val world = WorldBuilder.buildKeyBayside()
+    assertEquals(10, world.houses.size)
+    assertEquals(10, world.vehicleSpawns.size)
+    assertTrue(
+      "World should have Police HQ walkable rooftop",
+      world.walkableFloors.any { it.tag == "Police HQ Rooftop" },
+    )
+
+    val sim = GameSimulation(world)
+    assertEquals(2, sim.policeCars.size)
+    sim.isPlaying = true
+    sim.dropPhase = DropPhase.GROUND
+    sim.teleportOnFootTo(-12f, 24f, 0f)
+
+    // Fight an NPC to trigger police dispatch
+    val targetNpc = sim.pedestrians.first { !it.isFriend }
+    targetNpc.x = -12f
+    targetNpc.z = 25.4f
+    targetNpc.y = sim.computeGroundHeight(-12f, 25.4f, 0f)
+    sim.triggerPunch()
+    repeat(10) { sim.step(0.04f) }
+
+    assertTrue("Fighting NPC should trigger police chase", sim.policeChaseActive)
+    assertTrue("Wanted level must rise on fight", sim.wantedLevel >= 1)
+    assertTrue("At least one police car must dispatch", sim.policeCars.any { it.isPoliceDispatched })
+
+    // Step simulation while player stands still -> cruiser drives up, officer dismounts, catches by hand, draws gun & kills -> Game Over!
+    repeat(160) {
+      if (!sim.isPlayerEliminated) sim.step(0.05f)
+    }
+
+    assertTrue("Police officer should catch player and eliminate via gun", sim.isPlayerEliminated)
+    assertEquals(0, sim.playerHealth.toInt())
+    val snap = sim.snapshotHud(isMuted = false)
+    assertTrue(
+      "Eliminated killer should be Vice Police Officer (was ${snap.eliminatedByName})",
+      (snap.eliminatedByName ?: "").contains("POLICE"),
+    )
+    assertEquals(WeaponType.PISTOL_9MM, snap.eliminatedByWeapon)
+  }
+
+  @Test
+  fun escapingBeyondFiftyMetersClearsPoliceChase() {
+    val sim = GameSimulation(WorldBuilder.buildKeyBayside())
+    sim.isPlaying = true
+    sim.dropPhase = DropPhase.GROUND
+    sim.teleportOnFootTo(0f, 0f, 0f)
+
+    sim.triggerPoliceDispatch(0f, 0f, "CARJACK")
+    assertTrue(sim.policeChaseActive)
+    assertTrue(sim.wantedLevel >= 1)
+
+    // Move player > 60m away from all active police units
+    sim.teleportOnFootTo(95f, 95f, 0f)
+    repeat(5) { sim.step(0.05f) }
+
+    assertFalse("Moving >50m from all police units must stop the chase", sim.policeChaseActive)
+    assertEquals("Wanted level must clear when escaped >50m", 0, sim.wantedLevel)
+    assertTrue("No active chasing officers should remain", sim.policeOfficers.isEmpty())
+  }
 }

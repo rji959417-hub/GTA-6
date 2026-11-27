@@ -54,6 +54,8 @@ class GameSimulation(val world: WorldData) {
 
   var isSitting: Boolean = false
   var sitProgress: Float = 0f
+  var isProne: Boolean = false
+  var proneProgress: Float = 0f
   var isScoped: Boolean = false
 
   var heroPresetIndex: Int = 0
@@ -263,12 +265,19 @@ class GameSimulation(val world: WorldData) {
       )
     }
 
-  init {
-    populateHouseLoot()
-  }
-
   val ejectedNpcs = mutableListOf<EjectedNpcState>()
   var activeCarjack: CarjackSequenceState? = null
+  val policeCars = mutableListOf<VehicleRuntimeState>()
+  val policeOfficers = mutableListOf<PedestrianRuntimeState>()
+  var policeChaseActive: Boolean = false
+  var policeNearestDistMeters: Int = 0
+  var activePoliceCapture: PoliceCaptureSequenceState? = null
+  private var policeUnitSeq: Int = 0
+
+  init {
+    populateHouseLoot()
+    resetPoliceSystem()
+  }
 
   var activeVehicle: VehicleRuntimeState? = null
   var activeBoat: BoatRuntimeState? = null
@@ -277,10 +286,10 @@ class GameSimulation(val world: WorldData) {
   var currentInsideHouse: HouseSpec? = null
 
   var camYawRad: Float = world.playerSpawnYaw + PI.toFloat()
-  var camPitchRad: Float = 0.28f
-  var camPos: Vec3 = Vec3(playerX, 3.2f, playerZ + 6f)
-  var camLookAt: Vec3 = Vec3(playerX, 1.4f, playerZ)
-  var camFovDeg: Float = 62f
+  var camPitchRad: Float = 0.16f
+  var camPos: Vec3 = Vec3(playerX, 2.2f, playerZ + 2.85f)
+  var camLookAt: Vec3 = Vec3(playerX, 1.5f, playerZ)
+  var camFovDeg: Float = 56f
 
   val livingWorld = LivingWorldController(world)
   private val botController = BattleRoyaleBotController(this)
@@ -329,13 +338,13 @@ class GameSimulation(val world: WorldData) {
         input.consumeOrbitDelta()
       }
 
-      val camDist = 3.95f
-      val camX = lobbyStageX + 0.12f
-      val camY = lobbyGroundY + 1.48f
+      val camDist = 2.85f
+      val camX = lobbyStageX + 0.10f
+      val camY = lobbyGroundY + 1.38f
       val camZ = lobbyStageZ + camDist
       camPos = Vec3(camX, camY, camZ)
-      camLookAt = Vec3(lobbyStageX + 0.04f, lobbyGroundY + 1.04f, lobbyStageZ - 2.2f)
-      camFovDeg = 46f
+      camLookAt = Vec3(lobbyStageX + 0.04f, lobbyGroundY + 1.12f, lobbyStageZ - 1.5f)
+      camFovDeg = 45f
       return
     }
 
@@ -412,7 +421,7 @@ class GameSimulation(val world: WorldData) {
       userLookCooldown = max(0f, userLookCooldown - dt)
     }
 
-    if (wantedLevel > 0) {
+    if (wantedLevel > 0 && !policeChaseActive) {
       wantedDecaySec -= dt
       if (wantedDecaySec <= 0f) {
         wantedLevel = max(0, wantedLevel - 1)
@@ -442,6 +451,7 @@ class GameSimulation(val world: WorldData) {
     stepAiRoadTraffic(dt)
     stepAiOceanBoats(dt)
     stepPedestrians(dt)
+    stepPoliceSystem(dt)
     stepEjectedNpcs(dt)
     livingWorld.step(dt, playerX, playerZ, isSwimming, playerSpeedNorm, boats, camLookAt.x, camLookAt.z)
 
@@ -453,6 +463,9 @@ class GameSimulation(val world: WorldData) {
       dropPhase == DropPhase.AIRPLANE -> stepAirplaneRide(dt)
       dropPhase == DropPhase.FREEFALL -> stepFreefall(dt)
       dropPhase == DropPhase.PARACHUTE -> stepParachuteGlide(dt)
+      activePoliceCapture != null -> {
+        playerSpeedNorm = 0f
+      }
       carjack != null -> stepCarjackSequence(carjack, dt)
       boat != null -> stepDrivingBoat(boat, dt)
       car != null -> stepDrivingCar(car, dt)
@@ -503,9 +516,11 @@ class GameSimulation(val world: WorldData) {
     activeBoat = null
     activeCarjack = null
     isSitting = false
+    isProne = false
     isScoped = false
     isSwimming = false
     sitProgress = 0f
+    proneProgress = 0f
     activeAttackMove = null
     attackTimerSec = 0f
     activeParkour = null
@@ -531,6 +546,7 @@ class GameSimulation(val world: WorldData) {
     recomputeOwnedWeaponsFromPurchasedAndBag()
     populateHouseLoot()
     resetRivalFightersForMatch()
+    resetPoliceSystem()
     dropPhase = DropPhase.AIRPLANE
     planeTimerSec = 10.0f
     planeX = lobbyDropZone.spawnPlaneX
@@ -550,7 +566,7 @@ class GameSimulation(val world: WorldData) {
     airPeakY = playerY
     airStartY = playerY
     camYawRad = normalizeAngleRad(planeYawRad + PI.toFloat())
-    camPitchRad = 0.44f
+    camPitchRad = 0.28f
     showBanner("AIRPLANE DROP · TAP JUMP & LOOT HOUSES!")
   }
 
@@ -566,7 +582,7 @@ class GameSimulation(val world: WorldData) {
     horizVelZ = cos(planeYawRad) * 9.5f
     playerYawRad = planeYawRad
     isGrounded = false
-    camPitchRad = 0.42f
+    camPitchRad = 0.26f
     onCombatSfx?.invoke(CombatSfxEvent.KICK)
     showBanner("FREEFALL · DEPLOY PARACHUTE!")
     return true
@@ -589,6 +605,7 @@ class GameSimulation(val world: WorldData) {
     nearbyFriendCandidate = null
     isSwimming = false
     isSitting = false
+    isProne = false
     isScoped = false
     playerX = planeX
     playerY = planeY
@@ -699,7 +716,7 @@ class GameSimulation(val world: WorldData) {
       landingReactionTimerSec = 0.56f
       camLandingDipY = -0.35f
       dropPhase = DropPhase.GROUND
-      camPitchRad = 0.28f
+      camPitchRad = 0.16f
       onCombatSfx?.invoke(CombatSfxEvent.LAND_ROLL)
       showBanner("TOUCHDOWN! WELCOME TO VICE HORIZON")
     } else if (deepWater && playerY <= 0.1f) {
@@ -710,7 +727,7 @@ class GameSimulation(val world: WorldData) {
       airPeakY = playerY
       airStartY = playerY
       dropPhase = DropPhase.GROUND
-      camPitchRad = 0.28f
+      camPitchRad = 0.18f
       showBanner("SPLASH LANDING! SWIM TO SHORE OR BOATS")
     }
   }
@@ -913,7 +930,7 @@ class GameSimulation(val world: WorldData) {
         var bestEjected: EjectedNpcState? = null
         var bestHitY = b.y
 
-        for (ped in pedestrians) {
+        for (ped in pedestrians + policeOfficers) {
           if (ped.reactionState == NpcReactionState.KNOCKED_DOWN || ped.isFriend) continue
           val tHit = intersectSegmentCircleXZ(b.prevX, b.prevZ, b.x, b.z, ped.x, ped.z, 0.56f)
           if (tHit != null) {
@@ -1014,6 +1031,7 @@ class GameSimulation(val world: WorldData) {
     }
     isSitting = !isSitting
     if (isSitting) {
+      isProne = false
       input.autoSprint = false
       isScoped = false
       activeAttackMove = null
@@ -1022,6 +1040,25 @@ class GameSimulation(val world: WorldData) {
       weaponAimTimerSec = 0f
     }
     return isSitting
+  }
+
+  @Synchronized
+  fun toggleProne(): Boolean {
+    if (!isPlaying || isPaused || isGunShopOpen || isStyleShopOpen || isPlayerEliminated) return false
+    if (activeVehicle != null || activeBoat != null || activeCarjack != null || isSwimming || !isGrounded) {
+      return false
+    }
+    isProne = !isProne
+    if (isProne) {
+      isSitting = false
+      input.autoSprint = false
+      isScoped = false
+      activeAttackMove = null
+      attackTimerSec = 0f
+      playerSpeedNorm = 0f
+      weaponAimTimerSec = 0f
+    }
+    return isProne
   }
 
   @Synchronized
@@ -1037,6 +1074,7 @@ class GameSimulation(val world: WorldData) {
     input.autoSprint = !input.autoSprint
     if (input.autoSprint) {
       isSitting = false
+      isProne = false
       isScoped = false
       activeAttackMove = null
       attackTimerSec = 0f
@@ -1058,7 +1096,7 @@ class GameSimulation(val world: WorldData) {
       camYawRad = normalizeAngleRad(playerYawRad + PI.toFloat())
       camPitchRad = 0.02f
     } else {
-      camPitchRad = 0.24f
+      camPitchRad = 0.16f
     }
     return isScoped
   }
@@ -1319,11 +1357,14 @@ class GameSimulation(val world: WorldData) {
     activeCarjack = null
     activeParkour = null
     isSitting = false
+    isProne = false
     isScoped = false
     input.sprintHeld = false
     input.autoSprint = false
     sitProgress = 0f
+    proneProgress = 0f
     lobbyHeroYawRad = 0.16f
+    resetPoliceSystem()
     onEconomyChanged?.invoke()
   }
 
@@ -1333,7 +1374,10 @@ class GameSimulation(val world: WorldData) {
     ensureLiveSpectatedTarget()
     isSpectatingKiller = true
     val target = pedestrians.firstOrNull { it.id == spectatedKillerPedId }
-    val label = target?.let { rivalDisplayName(it) } ?: eliminatedByName ?: "KILLER"
+      ?: policeOfficers.firstOrNull { it.id == spectatedKillerPedId }
+    val label =
+      if (target?.isPoliceOfficer == true) "VICE POLICE OFFICER"
+      else target?.let { rivalDisplayName(it) } ?: eliminatedByName ?: "KILLER"
     showBanner("SPECTATING $label · VIEW ONLY")
   }
 
@@ -1696,8 +1740,10 @@ class GameSimulation(val world: WorldData) {
     activeCarjack = null
     isSwimming = false
     isSitting = false
+    isProne = false
     isScoped = false
     sitProgress = 0f
+    proneProgress = 0f
     activeParkour = null
     activeLandingReaction = null
     landingReactionTimerSec = 0f
@@ -1709,7 +1755,7 @@ class GameSimulation(val world: WorldData) {
     airStartY = playerY
     playerYawRad = PI.toFloat()
     camYawRad = normalizeAngleRad(playerYawRad + PI.toFloat())
-    camPitchRad = 0.25f
+    camPitchRad = 0.16f
     updateGunShopProximity()
   }
 
@@ -1734,6 +1780,7 @@ class GameSimulation(val world: WorldData) {
 
   private fun startMeleeMove(isKick: Boolean) {
     isSitting = false
+    isProne = false
     val current = activeAttackMove
     if (current != null && attackProgress < 0.65f) return
 
@@ -1780,7 +1827,7 @@ class GameSimulation(val world: WorldData) {
     val fwdZ = cos(playerYawRad)
     var hitCount = 0
 
-    for (ped in pedestrians) {
+    for (ped in pedestrians + policeOfficers) {
       if (ped.reactionState == NpcReactionState.KNOCKED_DOWN || ped.isFriend) continue
       val dx = ped.x - playerX
       val dz = ped.z - playerZ
@@ -1818,6 +1865,7 @@ class GameSimulation(val world: WorldData) {
 
     if (hitCount > 0) {
       onCombatSfx?.invoke(if (move.targetHitZone == HitZone.HEAD) CombatSfxEvent.HEADSHOT else CombatSfxEvent.HIT)
+      triggerPoliceDispatch(playerX, playerZ, "STREET FIGHT")
     }
     alertNearbyPeople(playerX, playerZ, radius = 18f, isGunfire = false)
   }
@@ -1985,6 +2033,7 @@ class GameSimulation(val world: WorldData) {
       )
 
     if (fromPlayer) {
+      triggerPoliceDispatch(ped.x, ped.z, if (fromGunfire) "SHOOTING" else "ASSAULT")
       showBanner(
         when {
           ped.hp <= 0f && hitZone == HitZone.HEAD -> "HEADSHOT KO! +$45"
@@ -2018,13 +2067,16 @@ class GameSimulation(val world: WorldData) {
         playerCash += 65
         onEconomyChanged?.invoke()
         wantedLevel = min(5, max(1, wantedLevel + 1))
-        wantedDecaySec = 18f
+        wantedDecaySec = 28f
         onCombatSfx?.invoke(CombatSfxEvent.CASH)
       } else if (attackerBot != null) {
         showBanner("${rivalDisplayName(attackerBot)} KO'D ${rivalDisplayName(ped)}")
       }
     } else if (ped.isFriend) {
       ped.reactionState = NpcReactionState.COMPANION
+    } else if (ped.isPoliceOfficer) {
+      ped.reactionState = NpcReactionState.FIGHTING_BACK
+      ped.panicTimerSec = 30f
     } else if (ped.isRivalFighter || ped.weapon != WeaponType.FISTS || attackerBot != null) {
       ped.reactionState = NpcReactionState.FIGHTING_BACK
       ped.panicTimerSec = 18f
@@ -2060,13 +2112,14 @@ class GameSimulation(val world: WorldData) {
         HitZone.NONE -> npc.y + 1.0f
       }
     hitSparks += HitSparkState(npc.x, sparkY, npc.z, floatArrayOf(1.0f, 0.24f, 0.28f))
+    triggerPoliceDispatch(npc.x, npc.z, "ASSAULT")
     if (npc.hp <= 0f) {
       npc.isDead = true
       npc.isFleeing = false
       npcDefeatedCount++
       playerCash += 45
       wantedLevel = min(5, max(1, wantedLevel + 1))
-      wantedDecaySec = 18f
+      wantedDecaySec = 28f
       onCombatSfx?.invoke(CombatSfxEvent.CASH)
       showBanner(if (hitZone == HitZone.HEAD) "HEADSHOT KO! +$45" else "KNOCKOUT! +$45")
     } else {
@@ -3047,6 +3100,9 @@ class GameSimulation(val world: WorldData) {
       isSitting = false
       if (inWater) isScoped = false
     }
+    if (inWater || input.jumpQueued || input.climbQueued || input.punchQueued || input.kickQueued || input.autoSprint || input.sprintHeld) {
+      isProne = false
+    }
     if (input.fireHeld || input.fireQueued) {
       isSitting = false
     }
@@ -3054,6 +3110,9 @@ class GameSimulation(val world: WorldData) {
     sitProgress =
       if (isSitting) min(1f, sitProgress + 5.5f * dt)
       else max(0f, sitProgress - 6.5f * dt)
+    proneProgress =
+      if (isProne) min(1f, proneProgress + 6.5f * dt)
+      else max(0f, proneProgress - 7.5f * dt)
 
     if (input.punchQueued) {
       input.punchQueued = false
@@ -3097,10 +3156,12 @@ class GameSimulation(val world: WorldData) {
 
     val isRolling = activeLandingReaction == LandingReactionType.COMBAT_ROLL && landingReactionTimerSec > 0.08f
     val isStaggered = activeLandingReaction == LandingReactionType.HARD_STAGGER && landingReactionTimerSec > 0.30f
-    val sprinting = (input.sprintHeld || input.autoSprint) && mag > 0.2f && !isSitting && !isScoped && activeAttackMove == null && !isStaggered
+    val isCrawlingProne = isProne || proneProgress > 0.3f
+    val sprinting = (input.sprintHeld || input.autoSprint) && mag > 0.2f && !isSitting && !isCrawlingProne && !isScoped && activeAttackMove == null && !isStaggered
     val targetSpeed =
       when {
         isSitting || sitProgress > 0.4f -> 0f
+        isCrawlingProne -> 1.65f
         isStaggered -> 1.1f
         inWater -> if (sprinting) 5.2f else 3.4f
         isScoped -> 2.8f
@@ -3128,8 +3189,8 @@ class GameSimulation(val world: WorldData) {
 
       playerX += dirX * speed * dt
       playerZ += dirZ * speed * dt
-      playerWalkCycle += dt * (if (sprinting) 13.5f else 8.2f) * mag
-      playerSpeedNorm = if (sprinting) 1f else 0.55f * mag
+      playerWalkCycle += dt * (if (isCrawlingProne) 4.8f else if (sprinting) 13.5f else 8.2f) * mag
+      playerSpeedNorm = if (isCrawlingProne) 0.28f * mag else if (sprinting) 1f else 0.55f * mag
     } else {
       playerSpeedNorm = (playerSpeedNorm - dt * 6f).coerceAtLeast(0f)
     }
@@ -3236,14 +3297,14 @@ class GameSimulation(val world: WorldData) {
     }
 
     dynamicVehicleColliders.clear()
-    for (v in vehicles) {
-      if (playerY > 0.85f) continue // Standing on vehicle hood/roof or higher floors shouldn't be pushed out horizontally
+    for (v in vehicles + policeCars) {
+      if (playerY > v.y + 0.85f) continue // Standing on vehicle hood/roof or higher floors shouldn't be pushed out horizontally
       val fx = sin(v.yawRad) * 1.1f
       val fz = cos(v.yawRad) * 1.1f
       dynamicVehicleColliders += CircleCollider(v.x + fx, v.z + fz, 1.15f, v.displayName)
       dynamicVehicleColliders += CircleCollider(v.x - fx, v.z - fz, 1.15f, v.displayName)
     }
-    for (p in pedestrians) {
+    for (p in pedestrians + policeOfficers) {
       if (p.reactionState != NpcReactionState.KNOCKED_DOWN && abs(p.y - playerY) < 1.5f) {
         dynamicVehicleColliders += CircleCollider(p.x, p.z, 0.35f, "Pedestrian")
       }
@@ -3257,7 +3318,7 @@ class GameSimulation(val world: WorldData) {
         world.aabbColliders,
         world.circleColliders + dynamicVehicleColliders,
         entityMinY = playerY,
-        entityMaxY = playerY + 1.75f,
+        entityMaxY = playerY + 1.98f,
       )
     val glooResolved = resolveEntityVsGlooWalls(rx, rz, 0.44f, playerY)
     val clamped = CollisionSolver.clampSwimmerToWorld(glooResolved.first, glooResolved.second)
@@ -3266,7 +3327,7 @@ class GameSimulation(val world: WorldData) {
 
     var closestCar: VehicleRuntimeState? = null
     var closestCarDist = 5.4f
-    for (v in vehicles) {
+    for (v in vehicles + policeCars) {
       val d = CollisionSolver.distXZ(playerX, playerZ, v.x, v.z)
       if (d < closestCarDist) {
         closestCarDist = d
@@ -3292,8 +3353,10 @@ class GameSimulation(val world: WorldData) {
     nearbyBoat = null
     isSwimming = false
     isSitting = false
+    isProne = false
     isScoped = false
     sitProgress = 0f
+    proneProgress = 0f
 
     val throttle = if (input.gasHeld) 1f else 0f
     val brakeInput = if (input.brakeHeld) 1f else 0f
@@ -3354,7 +3417,7 @@ class GameSimulation(val world: WorldData) {
     car.wheelSpinRad += (car.forwardSpeed / 0.36f) * dt
 
     dynamicVehicleColliders.clear()
-    for (other in vehicles) {
+    for (other in vehicles + policeCars) {
       if (other.id != car.id) {
         dynamicVehicleColliders += CircleCollider(other.x, other.z, 1.55f, other.displayName)
       }
@@ -3676,18 +3739,34 @@ class GameSimulation(val world: WorldData) {
         camFovDeg += (72f - camFovDeg) * (dt * 8f).coerceAtMost(1f)
       }
       dropPhase == DropPhase.FREEFALL || dropPhase == DropPhase.PARACHUTE -> {
-        val dist = if (dropPhase == DropPhase.PARACHUTE) 9.6f else 8.2f
-        val liftY = if (dropPhase == DropPhase.PARACHUTE) 1.8f else 0.6f
-        val targetLook = Vec3(playerX, playerY + liftY, playerZ)
-        val pitch = camPitchRad.coerceIn(-0.08f, 1.05f)
+        val dist = if (dropPhase == DropPhase.PARACHUTE) 3.65f else 3.35f
+        val liftY = if (dropPhase == DropPhase.PARACHUTE) 1.62f else 1.15f
+        val shoulderRightX = cos(camYawRad) * 0.18f
+        val shoulderRightZ = -sin(camYawRad) * 0.18f
+        val targetLook = Vec3(playerX + shoulderRightX, playerY + liftY, playerZ + shoulderRightZ)
+        val pitch = camPitchRad.coerceIn(-0.05f, 0.72f)
         val camX = targetLook.x + sin(camYawRad) * cos(pitch) * dist
         val camZ = targetLook.z + cos(camYawRad) * cos(pitch) * dist
-        val camY = (targetLook.y + sin(pitch) * dist + 1.4f).coerceAtLeast(1.8f)
-        val smooth = (dt * 12f).coerceAtMost(1f)
+        val camY = (targetLook.y + sin(pitch) * dist + 0.35f).coerceAtLeast(1.4f)
+        val smooth = (dt * 14f).coerceAtMost(1f)
         camPos = Vec3.lerp(camPos, Vec3(camX, camY, camZ), smooth)
         camLookAt = Vec3.lerp(camLookAt, targetLook, smooth)
-        val goalFov = if (dropPhase == DropPhase.FREEFALL) 74f else 68f
-        camFovDeg += (goalFov - camFovDeg) * (dt * 8f).coerceAtMost(1f)
+        val goalFov = if (dropPhase == DropPhase.FREEFALL) 58f else 56f
+        camFovDeg += (goalFov - camFovDeg) * (dt * 10f).coerceAtMost(1f)
+      }
+      activePoliceCapture != null -> {
+        val officer = policeOfficers.firstOrNull { it.id == activePoliceCapture?.officerId }
+        val midX = if (officer != null) (playerX + officer.x) * 0.5f else playerX
+        val midZ = if (officer != null) (playerZ + officer.z) * 0.5f else playerZ
+        val targetLook = Vec3(midX, playerY + 1.28f, midZ)
+        val dist = 3.25f
+        val camX = targetLook.x + sin(camYawRad) * cos(0.22f) * dist
+        val camZ = targetLook.z + cos(camYawRad) * cos(0.22f) * dist
+        val camY = targetLook.y + sin(0.22f) * dist + 0.25f
+        val smooth = (dt * 14f).coerceAtMost(1f)
+        camPos = Vec3.lerp(camPos, Vec3(camX, camY, camZ), smooth)
+        camLookAt = Vec3.lerp(camLookAt, targetLook, smooth)
+        camFovDeg += (52f - camFovDeg) * (dt * 10f).coerceAtMost(1f)
       }
       carjack != null -> {
         val targetCar = carjack.vehicleId?.let { id -> vehicles.firstOrNull { it.id == id } }
@@ -3764,23 +3843,29 @@ class GameSimulation(val world: WorldData) {
       }
       else -> {
         val insideEnclosed = currentInsideHouse != null && playerY < 6.4f && activeParkour == null
-        val dist = if (insideEnclosed) min(cameraMode.footDist, 3.1f) else cameraMode.footDist
-        val pitch = if (insideEnclosed) camPitchRad.coerceIn(-0.05f, 0.36f) else camPitchRad
-        val sitLookDrop = sitProgress * 0.34f
+        val dist = if (insideEnclosed) min(cameraMode.footDist, 2.35f) else cameraMode.footDist
+        val pitch = if (insideEnclosed) camPitchRad.coerceIn(-0.05f, 0.34f) else camPitchRad
+        val sitLookDrop = sitProgress * 0.38f + proneProgress * 0.96f
         val shakeX = if (camImpactShake > 0.01f) sin(worldTimeSec * 46f) * camImpactShake * 0.22f else 0f
         val shakeY = if (camImpactShake > 0.01f) cos(worldTimeSec * 53f) * camImpactShake * 0.16f else 0f
-        val targetLook = Vec3(playerX + shakeX, playerY + 1.48f - sitLookDrop + camLandingDipY + shakeY, playerZ)
+        val shoulderRightX = cos(camYawRad) * 0.20f
+        val shoulderRightZ = -sin(camYawRad) * 0.20f
+        val targetLook = Vec3(
+          playerX + shoulderRightX + shakeX,
+          playerY + 1.56f - sitLookDrop + camLandingDipY + shakeY,
+          playerZ + shoulderRightZ,
+        )
         val camX = targetLook.x + sin(camYawRad) * cos(pitch) * dist
         val camZ = targetLook.z + cos(camYawRad) * cos(pitch) * dist
-        val terrainClearY = TerrainHeightfield.elevationAt(camX, camZ) + 0.65f
-        val minH = max(playerY + 0.65f + camLandingDipY * 0.5f, terrainClearY)
+        val terrainClearY = TerrainHeightfield.elevationAt(camX, camZ) + 0.55f
+        val minH = max(playerY + 0.45f + camLandingDipY * 0.5f, terrainClearY)
         val maxH = if (insideEnclosed) playerY + 3.25f else playerY + 26f
         val camY = (targetLook.y + sin(pitch) * dist).coerceIn(minH, max(minH, maxH))
 
         val smooth = (dt * 14f).coerceAtMost(1f)
         camPos = Vec3.lerp(camPos, Vec3(camX, camY, camZ), smooth)
         camLookAt = Vec3.lerp(camLookAt, targetLook, smooth)
-        val targetFov = if (airborneFallNorm > 0.15f) 60f + airborneFallNorm * 8f else 60f
+        val targetFov = if (airborneFallNorm > 0.15f) 58f + airborneFallNorm * 8f else 56f
         camFovDeg += (targetFov - camFovDeg) * (dt * 10f).coerceAtMost(1f)
       }
     }
@@ -3849,6 +3934,7 @@ class GameSimulation(val world: WorldData) {
       if (targetBoat.isAiCruise) {
         targetBoat.isAiCruise = false
         targetBoat.forwardSpeed = 0f
+        triggerPoliceDispatch(targetBoat.x, targetBoat.z, "BOAT HIJACK")
         val leftX = -cos(targetBoat.yawRad)
         val leftZ = sin(targetBoat.yawRad)
         val npcId = "ejected_${++hijackCounter}"
@@ -3892,11 +3978,22 @@ class GameSimulation(val world: WorldData) {
         botDriver.targetPlayer = true
         botDriver.panicTimerSec = 18f
         showBanner("EJECTED ${rivalDisplayName(botDriver)}!")
+        triggerPoliceDispatch(targetCar.x, targetCar.z, "CARJACK")
+      }
+      if (targetCar.isPoliceCar) {
+        targetCar.isPoliceDispatched = false
+        targetCar.forwardSpeed = 0f
+        activeVehicle = targetCar
+        camYawRad = normalizeAngleRad(targetCar.yawRad + PI.toFloat())
+        camPitchRad = 0.24f
+        triggerPoliceDispatch(targetCar.x, targetCar.z, "POLICE CAR HIJACK")
+        return true
       }
       if (targetCar.isAiTraffic) {
         targetCar.isAiTraffic = false
         targetCar.forwardSpeed = 0f
         targetCar.isBraking = true
+        triggerPoliceDispatch(targetCar.x, targetCar.z, "CARJACK")
         val leftX = -cos(targetCar.yawRad)
         val leftZ = sin(targetCar.yawRad)
         val npcId = "ejected_${++hijackCounter}"
@@ -4019,6 +4116,12 @@ class GameSimulation(val world: WorldData) {
     teleportOnFootTo(world.atollCenter.first, world.atollCenter.second + 8f, 0f)
   }
 
+  @Synchronized
+  fun teleportToPoliceStation() {
+    teleportOnFootTo(world.policeStationSpawnPos.first, world.policeStationSpawnPos.second, 0f)
+    showBanner("VICE PD POLICE STATION")
+  }
+
   internal fun teleportOnFootTo(tx: Float, tz: Float, yaw: Float) {
     dropPhase = DropPhase.GROUND
     activeVehicle = null
@@ -4095,6 +4198,7 @@ class GameSimulation(val world: WorldData) {
     bulletProjectiles.clear()
     hitSparks.clear()
     glooWalls.clear()
+    resetPoliceSystem()
     playerReserveGlooWalls = 2
     isSwimming = false
     isSitting = false
@@ -4466,7 +4570,9 @@ class GameSimulation(val world: WorldData) {
   }
 
   private fun ensureLiveSpectatedTarget() {
-    val current = pedestrians.firstOrNull { it.id == spectatedKillerPedId && it.reactionState != NpcReactionState.KNOCKED_DOWN }
+    val current =
+      pedestrians.firstOrNull { it.id == spectatedKillerPedId && it.reactionState != NpcReactionState.KNOCKED_DOWN }
+        ?: policeOfficers.firstOrNull { it.id == spectatedKillerPedId && it.reactionState != NpcReactionState.KNOCKED_DOWN }
     if (current != null) return
     val fallback =
       pedestrians
@@ -4504,12 +4610,16 @@ class GameSimulation(val world: WorldData) {
     activeAttackMove = null
     activeCarjack = null
     activeParkour = null
+    activePoliceCapture = null
+    policeChaseActive = false
+    policeNearestDistMeters = 0
     playerFallProgress = 0.08f
     wantedLevel = 0
 
     val directKiller =
       lastAttackerPedId?.let { id ->
         pedestrians.firstOrNull { it.id == id && it.reactionState != NpcReactionState.KNOCKED_DOWN }
+          ?: policeOfficers.firstOrNull { it.id == id && it.reactionState != NpcReactionState.KNOCKED_DOWN }
       }
     val resolvedKiller =
       directKiller
@@ -4521,7 +4631,10 @@ class GameSimulation(val world: WorldData) {
           .minByOrNull { CollisionSolver.distXZ(playerX, playerZ, it.x, it.z) }
 
     spectatedKillerPedId = resolvedKiller?.id
-    eliminatedByName = lastAttackerName ?: resolvedKiller?.let { rivalDisplayName(it) } ?: "RIVAL FIGHTER"
+    eliminatedByName =
+      lastAttackerName
+        ?: resolvedKiller?.let { if (it.isPoliceOfficer) "VICE POLICE OFFICER" else rivalDisplayName(it) }
+        ?: "RIVAL FIGHTER"
     eliminatedByWeapon = if (lastAttackerName != null) lastAttackerWeapon else (resolvedKiller?.weapon ?: WeaponType.FISTS)
 
     awardMatchCoinsIfNeeded(isEliminated = true)
@@ -4693,6 +4806,7 @@ class GameSimulation(val world: WorldData) {
     val spectatedPed =
       if (isPlayerEliminated && isSpectatingKiller) {
         pedestrians.firstOrNull { it.id == spectatedKillerPedId }
+          ?: policeOfficers.firstOrNull { it.id == spectatedKillerPedId }
       } else {
         null
       }
@@ -4709,6 +4823,7 @@ class GameSimulation(val world: WorldData) {
       isDrivingBoat = boat != null,
       isSwimming = isSwimming,
       isSitting = isSitting || sitProgress > 0.35f,
+      isProne = isProne || proneProgress > 0.35f,
       isScoped = isScoped,
       isCarjacking = carjack != null,
       carjackTargetName = carjack?.targetName,
@@ -4786,7 +4901,9 @@ class GameSimulation(val world: WorldData) {
       isSpectatingKiller = isSpectatingKiller,
       eliminatedByName = eliminatedByName,
       eliminatedByWeapon = eliminatedByWeapon,
-      spectatingTargetName = spectatedPed?.let { rivalDisplayName(it) } ?: eliminatedByName,
+      spectatingTargetName =
+        if (spectatedPed?.isPoliceOfficer == true) "VICE POLICE OFFICER"
+        else spectatedPed?.let { rivalDisplayName(it) } ?: eliminatedByName,
       spectatingTargetHp = spectatedPed?.hp?.toInt() ?: 0,
       spectatingTargetWeapon = spectatedPed?.weapon ?: eliminatedByWeapon,
       lastMatchCoinsEarned = lastMatchCoinsEarned,
@@ -4815,7 +4932,391 @@ class GameSimulation(val world: WorldData) {
       glooWallCount = playerReserveGlooWalls + bagItems.count { it.kind == LootItemKind.GLOO_WALL },
       glooWallsMapPos = glooWalls.map { Pair(it.x, it.z) },
       aliveBotsCount = pedestrians.count { !it.isFriend && it.reactionState != NpcReactionState.KNOCKED_DOWN },
+      policeStationMapPos = world.policeStationCenter,
+      policeChaseActive = policeChaseActive,
+      policeNearestDistMeters = policeNearestDistMeters,
+      policeCarsMapPos = policeCars.filter { it != activeVehicle }.map { Pair(it.x, it.z) },
+      policeOfficersMapPos =
+        policeOfficers
+          .filter { it.hp > 0f && it.reactionState != NpcReactionState.KNOCKED_DOWN }
+          .map { Pair(it.x, it.z) },
+      isBeingArrestedByPolice = activePoliceCapture != null,
     )
+  }
+
+  // ---------------------------------------------------------
+  // VICE PD POLICE DISPATCH, PATROL CAR CHASE, DISMOUNT & 50M ESCAPE
+  // ---------------------------------------------------------
+  internal fun resetPoliceSystem() {
+    policeChaseActive = false
+    policeNearestDistMeters = 0
+    activePoliceCapture = null
+    policeOfficers.clear()
+    policeCars.clear()
+    val cx = world.policeStationCenter.first
+    val cz = world.policeStationCenter.second
+    val navy = floatArrayOf(0.08f, 0.14f, 0.30f)
+    val whiteTrim = floatArrayOf(0.95f, 0.96f, 0.99f)
+    val bay1X = cx + 13.7f
+    val bay2X = cx + 18.5f
+    val bayZ = cz - 7.8f
+    policeCars +=
+      VehicleRuntimeState(
+        id = "police_car_1",
+        displayName = "VICE PD INTERCEPTOR",
+        x = bay1X,
+        z = bayZ,
+        y = computeGroundHeight(bay1X, bayZ, 0f),
+        yawRad = PI.toFloat(),
+        bodyColor = navy,
+        trimColor = whiteTrim,
+        maxSpeed = 24f,
+        accel = 17f,
+        appearance = com.example.game.world.CartoonPresets.POLICE_OFFICER,
+        isPoliceCar = true,
+      )
+    policeCars +=
+      VehicleRuntimeState(
+        id = "police_car_2",
+        displayName = "VICE PD CRUISER",
+        x = bay2X,
+        z = bayZ,
+        y = computeGroundHeight(bay2X, bayZ, 0f),
+        yawRad = PI.toFloat(),
+        bodyColor = navy,
+        trimColor = whiteTrim,
+        maxSpeed = 23f,
+        accel = 16.5f,
+        appearance = com.example.game.world.CartoonPresets.POLICE_OFFICER,
+        isPoliceCar = true,
+      )
+  }
+
+  internal fun triggerPoliceDispatch(crimeX: Float, crimeZ: Float, reason: String) {
+    if (!isPlaying || isPlayerEliminated || dropPhase != DropPhase.GROUND) return
+    wantedLevel = min(5, max(1, wantedLevel + 1))
+    wantedDecaySec = 28f
+    policeChaseActive = true
+
+    val unit =
+      policeCars.firstOrNull {
+        it != activeVehicle && (!it.isPoliceDispatched || CollisionSolver.distXZ(it.x, it.z, playerX, playerZ) >= 48f)
+      } ?: policeCars.firstOrNull { it != activeVehicle }
+
+    if (unit != null) {
+      val currentDist = CollisionSolver.distXZ(unit.x, unit.z, playerX, playerZ)
+      if (!unit.isPoliceDispatched && (currentDist > 42f || unit.officerDisembarked)) {
+        // Place responding cruiser on dry, obstacle-free road/ground 26-30m away (<50m!) facing the crime scene
+        var bestX = unit.x
+        var bestZ = unit.z
+        var foundSpot = false
+        for (step in 0 until 8) {
+          val ang = (step * (PI * 0.25)).toFloat()
+          val candX = crimeX + cos(ang) * 28f
+          val candZ = crimeZ + sin(ang) * 28f
+          val clamped = CollisionSolver.clampCarToIsland(candX, candZ, margin = 3.5f)
+          if (CollisionSolver.isInDeepWater(clamped.first, clamped.second)) continue
+          val (rx, rz, hit) =
+            CollisionSolver.resolveAll(clamped.first, clamped.second, 1.55f, world.aabbColliders, world.circleColliders)
+          val dToCrime = CollisionSolver.distXZ(rx, rz, crimeX, crimeZ)
+          if (!hit && dToCrime in 18f..42f) {
+            bestX = rx
+            bestZ = rz
+            foundSpot = true
+            break
+          }
+        }
+        if (foundSpot) {
+          unit.x = bestX
+          unit.z = bestZ
+          unit.y = computeGroundHeight(bestX, bestZ, 0f)
+        }
+        unit.yawRad = angleBetweenXZ(playerX - unit.x, playerZ - unit.z)
+        unit.forwardSpeed = 10.5f
+        unit.officerDisembarked = false
+      }
+      unit.isPoliceDispatched = true
+      unit.isBraking = false
+    }
+
+    val minDist = computeNearestPoliceDistance()
+    policeNearestDistMeters = if (minDist < Float.MAX_VALUE) minDist.toInt() else 28
+    showBanner("POLICE ALERT ($reason)! RUN >50m TO ESCAPE!")
+  }
+
+  private fun clearPoliceChase(escaped: Boolean) {
+    policeChaseActive = false
+    policeNearestDistMeters = 0
+    activePoliceCapture = null
+    wantedLevel = 0
+    wantedDecaySec = 0f
+    policeOfficers.clear()
+    val cx = world.policeStationCenter.first
+    val cz = world.policeStationCenter.second
+    policeCars.forEachIndexed { idx, car ->
+      if (car != activeVehicle) {
+        car.isPoliceDispatched = false
+        car.officerDisembarked = false
+        car.forwardSpeed = 0f
+        car.lateralSpeed = 0f
+        car.isBraking = false
+        val bx = cx + if (idx == 0) 13.7f else 18.5f
+        val bz = cz - 7.8f
+        car.x = bx
+        car.z = bz
+        car.y = computeGroundHeight(bx, bz, 0f)
+        car.yawRad = PI.toFloat()
+      }
+    }
+    if (escaped) {
+      showBanner("ESCAPED POLICE! (>50m CLEAR)")
+    }
+  }
+
+  private fun computeNearestPoliceDistance(): Float {
+    var nearest = Float.MAX_VALUE
+    for (car in policeCars) {
+      if (car.isPoliceDispatched && car != activeVehicle && !car.officerDisembarked) {
+        nearest = min(nearest, CollisionSolver.distXZ(playerX, playerZ, car.x, car.z))
+      }
+    }
+    for (officer in policeOfficers) {
+      if (officer.hp > 0f && officer.reactionState != NpcReactionState.KNOCKED_DOWN) {
+        nearest = min(nearest, CollisionSolver.distXZ(playerX, playerZ, officer.x, officer.z))
+      }
+    }
+    return nearest
+  }
+
+  private fun stepPoliceSystem(dt: Float) {
+    val capture = activePoliceCapture
+    if (capture != null) {
+      stepPoliceCaptureSequence(capture, dt)
+      return
+    }
+
+    // Keep idle station cruisers seated cleanly on pavement when not pursuing or stolen
+    for (car in policeCars) {
+      if (!car.isPoliceDispatched && car != activeVehicle) {
+        car.y = computeGroundHeight(car.x, car.z, car.y + 0.4f)
+      }
+    }
+
+    if (!policeChaseActive || dropPhase != DropPhase.GROUND) return
+
+    // 1. Pursue player by police patrol car until close enough to dismount
+    for (car in policeCars) {
+      if (!car.isPoliceDispatched || car == activeVehicle || car.officerDisembarked) continue
+      val dx = playerX - car.x
+      val dz = playerZ - car.z
+      val dist = hypot(dx, dz).coerceAtLeast(0.05f)
+      val desiredYaw = angleBetweenXZ(dx, dz)
+      car.yawRad = lerpAngleRad(car.yawRad, desiredYaw, (dt * 4.5f).coerceAtMost(1f))
+      val targetSpeed =
+        when {
+          dist < 13f -> 7.0f
+          activeVehicle != null -> 18.5f
+          else -> 15.5f
+        }
+      car.forwardSpeed += (targetSpeed - car.forwardSpeed) * (dt * 5.5f).coerceAtMost(1f)
+
+      val fwdX = sin(car.yawRad)
+      val fwdZ = cos(car.yawRad)
+      val nextX = car.x + fwdX * car.forwardSpeed * dt
+      val nextZ = car.z + fwdZ * car.forwardSpeed * dt
+      val (rx, rz, hit) = CollisionSolver.resolveAll(nextX, nextZ, 1.45f, world.aabbColliders, world.circleColliders)
+      val gloo = resolveEntityVsGlooWalls(rx, rz, 1.35f, car.y)
+      val clamped = CollisionSolver.clampCarToIsland(gloo.first, gloo.second, margin = 2.0f)
+      car.x = clamped.first
+      car.z = clamped.second
+      if (hit) {
+        car.yawRad = normalizeAngleRad(car.yawRad + 0.48f)
+        car.forwardSpeed *= 0.65f
+      }
+      val groundY = computeGroundHeight(car.x, car.z, car.y + 0.55f)
+      car.y += (groundY - car.y) * (dt * 12f).coerceAtMost(1f)
+      val (slopePitch, slopeRoll) = TerrainHeightfield.computeSlopeAngles(car.x, car.z, car.yawRad)
+      car.pitchRad += (slopePitch - car.pitchRad) * (dt * 8f).coerceAtMost(1f)
+      car.rollRad += (slopeRoll - car.rollRad) * (dt * 8f).coerceAtMost(1f)
+      car.wheelSpinRad += (car.forwardSpeed / 0.36f) * dt
+
+      val distAfter = CollisionSolver.distXZ(playerX, playerZ, car.x, car.z)
+      val playerInFastCar = activeVehicle != null && abs(activeVehicle!!.forwardSpeed) >= 6.5f
+      if ((!playerInFastCar && distAfter <= 11.5f) || distAfter <= 7.5f) {
+        car.forwardSpeed = 0f
+        car.isBraking = true
+        car.officerDisembarked = true
+        val leftX = -cos(car.yawRad)
+        val leftZ = sin(car.yawRad)
+        val ox = car.x + leftX * 1.45f
+        val oz = car.z + leftZ * 1.45f
+        policeOfficers +=
+          PedestrianRuntimeState(
+            id = "police_officer_${++policeUnitSeq}",
+            waypoints = listOf(ox to oz, playerX to playerZ),
+            shirtColor = com.example.game.world.CartoonPresets.POLICE_OFFICER.tunicColor,
+            pantsColor = com.example.game.world.CartoonPresets.POLICE_OFFICER.pantsColor,
+            speed = 6.4f,
+            x = ox,
+            z = oz,
+            y = computeGroundHeight(ox, oz, car.y),
+            yawRad = angleBetweenXZ(playerX - ox, playerZ - oz),
+            appearance = com.example.game.world.CartoonPresets.POLICE_OFFICER,
+            hp = 160f,
+            maxHp = 160f,
+            reactionState = NpcReactionState.FIGHTING_BACK,
+            weapon = WeaponType.FISTS,
+            vestLevel = 3,
+            vestDurability = 100f,
+            helmetLevel = 3,
+            helmetDurability = 85f,
+            isBrBot = false,
+            isPoliceOfficer = true,
+            assignedPoliceCarId = car.id,
+            armReachNorm = 0.85f,
+          )
+        onCombatSfx?.invoke(CombatSfxEvent.FRIEND)
+        showBanner("POLICE OUT OF CAR! RUNNING TO CATCH YOU!")
+      }
+    }
+
+    // 2. Step Police Officers chasing on foot with hands out to catch player
+    val offIter = policeOfficers.iterator()
+    while (offIter.hasNext()) {
+      val officer = offIter.next()
+      if (officer.hp <= 0f) {
+        officer.reactionState = NpcReactionState.KNOCKED_DOWN
+        officer.fallProgress = min(1f, officer.fallProgress + dt * 4.5f)
+        officer.armReachNorm = 0f
+        officer.policeHasGunDrawn = false
+        continue
+      }
+      if (officer.hitReactTimerSec > 0f) {
+        officer.hitReactTimerSec = max(0f, officer.hitReactTimerSec - dt)
+      }
+
+      val dx = playerX - officer.x
+      val dz = playerZ - officer.z
+      val dist = hypot(dx, dz).coerceAtLeast(0.01f)
+      val dirX = dx / dist
+      val dirZ = dz / dist
+
+      val chaseSpeed = if (dist > 3.5f) 6.45f else 5.85f
+      officer.vx *= max(0f, 1f - dt * 6f)
+      officer.vz *= max(0f, 1f - dt * 6f)
+      val candX = officer.x + (dirX * chaseSpeed + officer.vx) * dt
+      val candZ = officer.z + (dirZ * chaseSpeed + officer.vz) * dt
+      val (rx, rz, _) = CollisionSolver.resolveAll(candX, candZ, 0.42f, world.aabbColliders, world.circleColliders)
+      val gloo = resolveEntityVsGlooWalls(rx, rz, 0.42f, officer.y)
+      val clamped = CollisionSolver.clampCarToIsland(gloo.first, gloo.second, margin = 1.2f)
+      officer.x = clamped.first
+      officer.z = clamped.second
+      officer.y = computeGroundHeight(officer.x, officer.z, officer.y + 0.5f)
+      officer.yawRad = lerpAngleRad(officer.yawRad, angleBetweenXZ(dirX, dirZ), (dt * 10f).coerceAtMost(1f))
+      officer.walkCycle += chaseSpeed * dt * 2.15f
+      officer.armReachNorm = if (dist < 8.5f) 1.0f else 0.45f
+
+      // Re-board patrol car if player speeds away in a vehicle while still < 50m
+      if (activeVehicle != null && abs(activeVehicle!!.forwardSpeed) > 7.5f && dist in 15f..48f) {
+        val car = officer.assignedPoliceCarId?.let { id -> policeCars.firstOrNull { it.id == id } }
+        if (car != null && car != activeVehicle && car.isPoliceDispatched) {
+          car.officerDisembarked = false
+          car.isBraking = false
+          car.forwardSpeed = 12f
+          offIter.remove()
+          continue
+        }
+      }
+
+      // Catch player by hand within reach!
+      val catchDist = CollisionSolver.distXZ(playerX, playerZ, officer.x, officer.z)
+      if (catchDist <= 1.85f && abs(playerY - officer.y) < 1.8f && activeCarjack == null) {
+        if (activeVehicle != null && abs(activeVehicle!!.forwardSpeed) < 6.5f) {
+          activeVehicle!!.forwardSpeed = 0f
+          activeVehicle = null
+        }
+        if (activeVehicle == null && activeBoat == null) {
+          activePoliceCapture = PoliceCaptureSequenceState(officerId = officer.id)
+          officer.armReachNorm = 1.0f
+          officer.policeHasGunDrawn = false
+          officer.weapon = WeaponType.FISTS
+          showBanner("POLICE CAUGHT YOU BY HAND!")
+          return
+        }
+      }
+    }
+
+    // 3. Check 50-meter Escape Rule
+    val nearestDist = computeNearestPoliceDistance()
+    if (nearestDist == Float.MAX_VALUE) {
+      clearPoliceChase(escaped = false)
+    } else {
+      policeNearestDistMeters = nearestDist.toInt()
+      if (nearestDist >= 50.0f) {
+        clearPoliceChase(escaped = true)
+      }
+    }
+  }
+
+  private fun stepPoliceCaptureSequence(capture: PoliceCaptureSequenceState, dt: Float) {
+    input.moveX = 0f
+    input.moveY = 0f
+    input.sprintHeld = false
+    input.autoSprint = false
+    input.jumpQueued = false
+    input.climbQueued = false
+    input.punchQueued = false
+    input.kickQueued = false
+    input.fireHeld = false
+    input.fireQueued = false
+    playerSpeedNorm = 0f
+    isSitting = false
+    isProne = false
+    isScoped = false
+    activeAttackMove = null
+
+    val officer = policeOfficers.firstOrNull { it.id == capture.officerId }
+    if (officer == null || officer.hp <= 0f) {
+      activePoliceCapture = null
+      return
+    }
+
+    val dx = officer.x - playerX
+    val dz = officer.z - playerZ
+    val dist = hypot(dx, dz).coerceAtLeast(0.01f)
+    val nx = dx / dist
+    val nz = dz / dist
+    val holdDist = if (capture.elapsedSec < 0.65f) 1.05f else 1.48f
+    officer.x = playerX + nx * holdDist
+    officer.z = playerZ + nz * holdDist
+    officer.y = computeGroundHeight(officer.x, officer.z, playerY)
+    officer.yawRad = angleBetweenXZ(playerX - officer.x, playerZ - officer.z)
+    playerYawRad = lerpAngleRad(playerYawRad, angleBetweenXZ(nx, nz), (dt * 12f).coerceAtMost(1f))
+
+    capture.elapsedSec += dt
+    if (capture.elapsedSec < 0.65f) {
+      officer.armReachNorm = 1.0f
+      officer.policeHasGunDrawn = false
+      officer.weapon = WeaponType.FISTS
+    } else if (capture.elapsedSec < 1.05f) {
+      officer.armReachNorm = 0f
+      officer.policeHasGunDrawn = true
+      officer.weapon = WeaponType.PISTOL_9MM
+      showBanner("POLICE AIMING GUN!")
+    } else if (!capture.shotFired) {
+      capture.shotFired = true
+      officer.armReachNorm = 0f
+      officer.policeHasGunDrawn = true
+      officer.weapon = WeaponType.PISTOL_9MM
+      hitSparks += HitSparkState(playerX, playerY + 1.25f, playerZ, floatArrayOf(1.0f, 0.24f, 0.16f), durationSec = 0.35f)
+      hitSparks += HitSparkState(officer.x - nx * 0.45f, officer.y + 1.32f, officer.z - nz * 0.45f, floatArrayOf(1.0f, 0.85f, 0.25f), durationSec = 0.22f)
+      onCombatSfx?.invoke(CombatSfxEvent.GUN_HEAVY)
+      lastAttackerPedId = officer.id
+      lastAttackerName = "VICE POLICE OFFICER"
+      lastAttackerWeapon = WeaponType.PISTOL_9MM
+      playerHealth = 0f
+      triggerPlayerElimination()
+    }
   }
 
   internal fun spawnGlooWallForBot(ped: PedestrianRuntimeState, threatX: Float, threatZ: Float): Boolean {

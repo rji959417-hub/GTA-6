@@ -453,8 +453,30 @@ fun HudCustomizeOverlay(
     // 3. LIVE DRAGGABLE BOTTOM-LEFT & BOTTOM-RIGHT CONTROLS PREVIEW
     // =========================================================================
     if (!previewDriving) {
-      // JOYSTICK PREVIEW
       val joySize = (baseJoystickDp * draft.effectiveScale(HudElementId.JOYSTICK)).dp
+      // RUN BUTTON PREVIEW (above Joystick, independently movable)
+      val sprintScale = controlScale * draft.effectiveScale(HudElementId.SPRINT)
+      PreviewCirclePostureTile(
+        kind = FreeFirePostureKind.RUN,
+        diameter = (54f * sprintScale).dp,
+        selected = isSelected(HudElementId.SPRINT),
+        tag = "hud_preview_sprint",
+        modifier =
+          Modifier.align(Alignment.BottomStart)
+            .padding(start = (joySize * 0.28f), bottom = joySize + 14.dp)
+            .then(
+              rememberDraggableHudModifier(
+                id = HudElementId.SPRINT,
+                draft = draft,
+                containerWidthPx = containerW,
+                containerHeightPx = containerH,
+                onSelect = { selectSingle(HudElementId.SPRINT) },
+                onDragNormDelta = { dx, dy -> nudgeOffset(HudElementId.SPRINT, dx, dy) },
+              )
+            ),
+      )
+
+      // JOYSTICK PREVIEW
       PreviewSelectableBox(
         selected = isSelected(HudElementId.JOYSTICK),
         accent = ElectricCyan,
@@ -536,25 +558,6 @@ fun HudCustomizeOverlay(
                 onDragNormDelta = { dx, dy -> nudgeOffset(HudElementId.GLOO_WALL, dx, dy) },
               ),
           )
-          val sitScale = controlScale * draft.effectiveScale(HudElementId.SIT)
-          PreviewButtonTile(
-            label = "SIT",
-            icon = Icons.Filled.EventSeat,
-            accent = ElectricCyan,
-            width = (60f * sitScale).dp,
-            height = (52f * sitScale).dp,
-            selected = isSelected(HudElementId.SIT),
-            tag = "hud_preview_sit",
-            modifier =
-              rememberDraggableHudModifier(
-                id = HudElementId.SIT,
-                draft = draft,
-                containerWidthPx = containerW,
-                containerHeightPx = containerH,
-                onSelect = { selectSingle(HudElementId.SIT) },
-                onDragNormDelta = { dx, dy -> nudgeOffset(HudElementId.SIT, dx, dy) },
-              ),
-          )
           val kickScale = controlScale * draft.effectiveScale(HudElementId.KICK)
           PreviewButtonTile(
             label = "KICK",
@@ -593,9 +596,25 @@ fun HudCustomizeOverlay(
                 onDragNormDelta = { dx, dy -> nudgeOffset(HudElementId.PUNCH, dx, dy) },
               ),
           )
+          val jumpScale = controlScale * draft.effectiveScale(HudElementId.JUMP)
+          PreviewCirclePostureTile(
+            kind = FreeFirePostureKind.JUMP,
+            diameter = (54f * jumpScale).dp,
+            selected = isSelected(HudElementId.JUMP),
+            tag = "hud_preview_jump",
+            modifier =
+              rememberDraggableHudModifier(
+                id = HudElementId.JUMP,
+                draft = draft,
+                containerWidthPx = containerW,
+                containerHeightPx = containerH,
+                onSelect = { selectSingle(HudElementId.JUMP) },
+                onDragNormDelta = { dx, dy -> nudgeOffset(HudElementId.JUMP, dx, dy) },
+              ),
+          )
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
           val scopeScale = controlScale * draft.effectiveScale(HudElementId.SCOPE)
           PreviewButtonTile(
             label = "SCOPE",
@@ -634,42 +653,36 @@ fun HudCustomizeOverlay(
                 onDragNormDelta = { dx, dy -> nudgeOffset(HudElementId.SHOOT, dx, dy) },
               ),
           )
-          val jumpScale = controlScale * draft.effectiveScale(HudElementId.JUMP)
-          PreviewButtonTile(
-            label = "JUMP",
-            icon = Icons.Filled.ArrowUpward,
-            accent = ElectricCyan,
-            width = (58f * jumpScale).dp,
-            height = (58f * jumpScale).dp,
-            selected = isSelected(HudElementId.JUMP),
-            tag = "hud_preview_jump",
+          val sleepScale = controlScale * draft.effectiveScale(HudElementId.SLEEP)
+          PreviewCirclePostureTile(
+            kind = FreeFirePostureKind.SLEEP,
+            diameter = (54f * sleepScale).dp,
+            selected = isSelected(HudElementId.SLEEP),
+            tag = "hud_preview_sleep",
             modifier =
               rememberDraggableHudModifier(
-                id = HudElementId.JUMP,
+                id = HudElementId.SLEEP,
                 draft = draft,
                 containerWidthPx = containerW,
                 containerHeightPx = containerH,
-                onSelect = { selectSingle(HudElementId.JUMP) },
-                onDragNormDelta = { dx, dy -> nudgeOffset(HudElementId.JUMP, dx, dy) },
+                onSelect = { selectSingle(HudElementId.SLEEP) },
+                onDragNormDelta = { dx, dy -> nudgeOffset(HudElementId.SLEEP, dx, dy) },
               ),
           )
-          val sprintScale = controlScale * draft.effectiveScale(HudElementId.SPRINT)
-          PreviewButtonTile(
-            label = "SPRINT",
-            icon = Icons.AutoMirrored.Filled.DirectionsRun,
-            accent = NeonPink,
-            width = (62f * sprintScale).dp,
-            height = (58f * sprintScale).dp,
-            selected = isSelected(HudElementId.SPRINT),
-            tag = "hud_preview_sprint",
+          val sitScale = controlScale * draft.effectiveScale(HudElementId.SIT)
+          PreviewCirclePostureTile(
+            kind = FreeFirePostureKind.SIT,
+            diameter = (54f * sitScale).dp,
+            selected = isSelected(HudElementId.SIT),
+            tag = "hud_preview_sit",
             modifier =
               rememberDraggableHudModifier(
-                id = HudElementId.SPRINT,
+                id = HudElementId.SIT,
                 draft = draft,
                 containerWidthPx = containerW,
                 containerHeightPx = containerH,
-                onSelect = { selectSingle(HudElementId.SPRINT) },
-                onDragNormDelta = { dx, dy -> nudgeOffset(HudElementId.SPRINT, dx, dy) },
+                onSelect = { selectSingle(HudElementId.SIT) },
+                onDragNormDelta = { dx, dy -> nudgeOffset(HudElementId.SIT, dx, dy) },
               ),
           )
         }
@@ -1193,6 +1206,36 @@ private fun PreviewMiniPill(
         color = TextPrimary,
       )
     }
+  }
+}
+
+@Composable
+private fun PreviewCirclePostureTile(
+  kind: FreeFirePostureKind,
+  diameter: Dp,
+  selected: Boolean,
+  tag: String,
+  modifier: Modifier = Modifier,
+) {
+  Box(
+    contentAlignment = Alignment.Center,
+    modifier =
+      modifier
+        .size(diameter)
+        .clip(CircleShape)
+        .background(if (selected) GoldenHour.copy(alpha = 0.28f) else Color(0xFF13171F).copy(alpha = 0.72f))
+        .border(
+          width = if (selected) 2.2.dp else 1.2.dp,
+          color = if (selected) GoldenHour else Color.White.copy(alpha = 0.42f),
+          shape = CircleShape,
+        )
+        .then(if (tag.isNotEmpty()) Modifier.testTag(tag) else Modifier),
+  ) {
+    FreeFirePostureVectorIcon(
+      kind = kind,
+      tint = Color.White,
+      modifier = Modifier.size(diameter * 0.68f),
+    )
   }
 }
 

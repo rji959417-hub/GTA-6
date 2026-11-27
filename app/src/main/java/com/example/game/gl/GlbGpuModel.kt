@@ -25,6 +25,7 @@ class GlbGpuModel private constructor(
   private val gpuParts: List<GpuPart>,
   private val textureIds: IntArray,
   val stats: ParsedGlbModel,
+  private val runningFbxClip: FbxAnimationClip? = null,
 ) {
   private data class GpuPart(
     val mesh: Mesh,
@@ -34,8 +35,16 @@ class GlbGpuModel private constructor(
 
   private val poseWorkspace = GlbLoader.PoseWorkspace(stats)
   private val modelMat = FloatArray(16)
+  private var fbxAnimTimeSec = 0f
+  private var fbxBlendWeight = 0f
   val rightHandLocalPos: FloatArray
     get() = poseWorkspace.rightHandPos
+
+  val hasRunningFbxClip: Boolean
+    get() = runningFbxClip != null
+
+  val currentFbxBlendWeight: Float
+    get() = fbxBlendWeight
 
   fun updateAnimation(
     walkCycle: Float,
@@ -44,7 +53,9 @@ class GlbGpuModel private constructor(
     isSwimming: Boolean,
     fallProgress: Float,
     worldTimeSec: Float,
+    dtSec: Float = 0.016f,
     sitProgress: Float = 0f,
+    proneProgress: Float = 0f,
     attackMove: CombatMoveType? = null,
     attackProgress: Float = 0f,
     equippedWeapon: WeaponType = WeaponType.FISTS,
@@ -59,7 +70,7 @@ class GlbGpuModel private constructor(
     landingProgress: Float = 0f,
   ) {
     if (!stats.rig.hasLocomotionRig) return
-    val pose =
+    val basePose =
       buildHumanoidPose(
         walkCycle = walkCycle,
         speedNorm = speedNorm,
@@ -68,6 +79,7 @@ class GlbGpuModel private constructor(
         fallProgress = fallProgress,
         worldTimeSec = worldTimeSec,
         sitProgress = sitProgress,
+        proneProgress = proneProgress,
         attackMove = attackMove,
         attackProgress = attackProgress,
         equippedWeapon = equippedWeapon,
@@ -81,7 +93,55 @@ class GlbGpuModel private constructor(
         landingReaction = landingReaction,
         landingProgress = landingProgress,
       )
-    poseWorkspace.evaluatePose(pose)
+
+    val safeDt = dtSec.coerceIn(0.001f, 0.1f)
+    val isMovingOnFoot =
+      speedNorm > 0.08f &&
+        !isSwimming &&
+        fallProgress < 0.05f &&
+        !isSkydiving &&
+        !isParachuting &&
+        sitProgress < 0.25f &&
+        proneProgress < 0.25f &&
+        attackMove == null &&
+        parkourType == null &&
+        airborneFallNorm < 0.1f &&
+        landingReaction == null
+
+    val fadeStep = (safeDt / 0.2f).coerceIn(0f, 1f)
+    if (runningFbxClip != null && isMovingOnFoot) {
+      fbxBlendWeight = (fbxBlendWeight + fadeStep).coerceIn(0f, 1f)
+      fbxAnimTimeSec += safeDt * (0.78f + speedNorm.coerceIn(0f, 1.35f) * 0.32f)
+    } else {
+      fbxBlendWeight = (fbxBlendWeight - fadeStep).coerceIn(0f, 1f)
+      if (fbxBlendWeight > 0.001f) {
+        fbxAnimTimeSec += safeDt * 0.65f
+      } else {
+        fbxAnimTimeSec = 0f
+      }
+    }
+
+    val finalPose =
+      if (runningFbxClip != null && fbxBlendWeight > 0.001f) {
+        val rawFbxPose = runningFbxClip.sampleAsHumanPose(fbxAnimTimeSec)
+        val fbxPose =
+          if (equippedWeapon != WeaponType.FISTS) {
+            rawFbxPose.copy(
+              rightArmPitchDeg = basePose.rightArmPitchDeg,
+              rightArmOutDeg = basePose.rightArmOutDeg,
+              rightForearmBendDeg = basePose.rightForearmBendDeg,
+              leftArmPitchDeg = if (aimNorm > 0.1f) basePose.leftArmPitchDeg else rawFbxPose.leftArmPitchDeg,
+              leftForearmBendDeg = if (aimNorm > 0.1f) basePose.leftForearmBendDeg else rawFbxPose.leftForearmBendDeg,
+            )
+          } else {
+            rawFbxPose
+          }
+        FbxAnimationClip.lerpPose(basePose, fbxPose, fbxBlendWeight)
+      } else {
+        basePose
+      }
+
+    poseWorkspace.evaluatePose(finalPose)
     for (i in gpuParts.indices) {
       gpuParts[i].mesh.updateVertices(poseWorkspace.partAnimatedVerts[i])
     }
@@ -174,6 +234,7 @@ class GlbGpuModel private constructor(
       fallProgress: Float,
       worldTimeSec: Float,
       sitProgress: Float = 0f,
+      proneProgress: Float = 0f,
       attackMove: CombatMoveType? = null,
       attackProgress: Float = 0f,
       equippedWeapon: WeaponType = WeaponType.FISTS,
@@ -254,11 +315,13 @@ class GlbGpuModel private constructor(
           else -> 1.2f + breath * 1.0f + 11f * softLandCurve
         }
 
+      val proneP = proneProgress.coerceIn(0f, 1f)
       val rootPitchDeg =
         when {
           fallProgress > 0.01f -> -fallProgress * 86f
           isSkydiving -> 68f + sin(worldTimeSec * 4.5f) * 4f
           isSwimming -> 44f
+          proneP > 0.01f -> 84f * proneP
           else -> 0f
         }
 
@@ -338,9 +401,14 @@ class GlbGpuModel private constructor(
         }
         val sitThigh = -84f
         val sitKnee = 86f
-        val finalThigh = thighPitch * (1f - sitProgress) + sitThigh * sitProgress
-        val finalKnee = kneeBend * (1f - sitProgress) + sitKnee * sitProgress
-        val ankle = ((-finalThigh * 0.28f - finalKnee * 0.44f) * (1f - sitProgress)).coerceIn(-24f, 26f)
+        val proneCrawl = sin(phase) * 14f * speedNorm.coerceIn(0f, 1f)
+        val proneThigh = 6f + proneCrawl
+        val proneKnee = (16f - sin(phase) * 14f * speedNorm.coerceIn(0f, 1f)).coerceAtLeast(4f)
+        val seatedThigh = thighPitch * (1f - sitProgress) + sitThigh * sitProgress
+        val seatedKnee = kneeBend * (1f - sitProgress) + sitKnee * sitProgress
+        val finalThigh = seatedThigh * (1f - proneP) + proneThigh * proneP
+        val finalKnee = seatedKnee * (1f - proneP) + proneKnee * proneP
+        val ankle = (((-finalThigh * 0.28f - finalKnee * 0.44f) * (1f - sitProgress)) * (1f - proneP) + (38f * proneP)).coerceIn(-24f, 42f)
         return Triple(finalThigh, finalKnee, ankle)
       }
 
@@ -422,6 +490,15 @@ class GlbGpuModel private constructor(
           armPitch = armPitch * (1f - sitProgress) + (-36f) * sitProgress
           forearmBend = forearmBend * (1f - sitProgress) + (-48f) * sitProgress
         }
+        if (proneP > 0.05f) {
+          val crawlSwing = sin(legPhase) * 18f * speedNorm.coerceIn(0f, 1f)
+          val proneArmPitch = -114f + crawlSwing
+          val proneForearm = -72f
+          val proneOut = 14f
+          armPitch = armPitch * (1f - proneP) + proneArmPitch * proneP
+          forearmBend = forearmBend * (1f - proneP) + proneForearm * proneP
+          armOut = armOut * (1f - proneP) + proneOut * proneP
+        }
 
         return Triple(armPitch, armOut, forearmBend)
       }
@@ -430,15 +507,15 @@ class GlbGpuModel private constructor(
       val (rArm, rOut, rForearm) = calcArm(walkCycle + PI.toFloat(), isRight = true)
 
       return GlbCharacterPose(
-        pelvisBounceY = bounceY,
-        pelvisSwayX = pelvisSwayX,
-        pelvisYawDeg = pelvisYawDeg,
-        pelvisRollDeg = pelvisRollDeg,
+        pelvisBounceY = bounceY * (1f - proneP),
+        pelvisSwayX = pelvisSwayX * (1f - proneP * 0.6f),
+        pelvisYawDeg = pelvisYawDeg * (1f - proneP),
+        pelvisRollDeg = pelvisRollDeg * (1f - proneP),
         rootPitchDeg = rootPitchDeg,
-        torsoYawDeg = torsoYawDeg,
-        torsoLeanDeg = torsoLeanDeg,
-        headPitchDeg = sin(worldTimeSec * 1.4f) * 1.6f * idleFactor - (if (isSkydiving) 45f else 0f),
-        headYawDeg = -torsoYawDeg * 0.45f,
+        torsoYawDeg = torsoYawDeg * (1f - proneP),
+        torsoLeanDeg = torsoLeanDeg * (1f - proneP) + (-14f * proneP),
+        headPitchDeg = (sin(worldTimeSec * 1.4f) * 1.6f * idleFactor - (if (isSkydiving) 45f else 0f)) * (1f - proneP) + (-54f * proneP),
+        headYawDeg = -torsoYawDeg * 0.45f * (1f - proneP),
         leftThighPitchDeg = lThigh,
         leftKneeBendDeg = lKnee,
         leftAnklePitchDeg = lAnkle,
@@ -463,6 +540,7 @@ class GlbGpuModel private constructor(
       yawRad: Float,
       fallProgress: Float,
       sitProgress: Float,
+      proneProgress: Float = 0f,
       landingReaction: LandingReactionType? = null,
       landingProgress: Float = 0f,
       hasSkeletalRig: Boolean = true,
@@ -474,15 +552,16 @@ class GlbGpuModel private constructor(
       val isCombatRoll = landingReaction == LandingReactionType.COMBAT_ROLL && landingProgress < 0.96f
       val landP = landingProgress.coerceIn(0f, 1f)
       val rollCurve = if (isCombatRoll) sin(landP * PI.toFloat()) else 0f
-      val sitDropY = sitProgress * 0.34f * (1f - fallProgress)
+      val sitDropY = sitProgress * 0.36f * (1f - fallProgress)
+      val proneDropY = proneProgress.coerceIn(0f, 1f) * 0.80f * (1f - fallProgress)
       val rollDropY = rollCurve * 0.28f
       val fallOffsetY = fallProgress * 0.16f
       val rigidBounceY =
-        if (hasSkeletalRig || fallProgress > 0.1f || sitProgress > 0.1f) 0f
+        if (hasSkeletalRig || fallProgress > 0.1f || sitProgress > 0.1f || proneProgress > 0.1f) 0f
         else abs(sin(walkCycle)) * 0.055f * speedNorm.coerceIn(0f, 1.35f) * (if (isSprinting) 1.15f else 0.9f)
 
       Matrix.setIdentityM(outMatrix, 0)
-      Matrix.translateM(outMatrix, 0, x, y + rigidBounceY + fallOffsetY - sitDropY - rollDropY, z)
+      Matrix.translateM(outMatrix, 0, x, y + rigidBounceY + fallOffsetY - sitDropY - proneDropY - rollDropY, z)
       Matrix.rotateM(outMatrix, 0, yawDeg, 0f, 1f, 0f)
       if (isCombatRoll) {
         Matrix.translateM(outMatrix, 0, 0f, 0.72f, 0f)
@@ -491,13 +570,16 @@ class GlbGpuModel private constructor(
       }
       if (!hasSkeletalRig && fallProgress > 0.05f) {
         Matrix.rotateM(outMatrix, 0, -fallProgress * 86f, 1f, 0f, 0f)
+      } else if (!hasSkeletalRig && proneProgress > 0.05f) {
+        Matrix.translateM(outMatrix, 0, 0f, 0.22f, 0f)
+        Matrix.rotateM(outMatrix, 0, proneProgress * 84f, 1f, 0f, 0f)
       }
     }
 
     fun tryLoadFromAssets(
       context: Context?,
       assetPath: String = "/cyberpunk_character.glb",
-      targetHeightMeters: Float = 1.76f,
+      targetHeightMeters: Float = 2.02f,
     ): GlbGpuModel? {
       if (context == null) return null
       val cleanName = assetPath.trimStart('/')
@@ -551,17 +633,71 @@ class GlbGpuModel private constructor(
               textureId = texId,
             )
           }
+        val runningFbxClip = tryLoadFbxAnimation(context)
         Log.i(
           TAG,
           "Loaded $sourceLabel: ${parsed.parts.size} parts, ${parsed.totalTriangles} tris, " +
             "rig=${parsed.rig.hasLocomotionRig}, rotated180Y=${parsed.rotated180Y}, " +
+            "fbxRunClip=${runningFbxClip != null}, " +
             "minY=${parsed.normalizedBounds.minY}, height=${"%.2f".format(parsed.normalizedBounds.height)}m",
         )
-        GlbGpuModel(gpuParts, texIds, parsed)
+        GlbGpuModel(gpuParts, texIds, parsed, runningFbxClip = runningFbxClip)
       } catch (t: Throwable) {
         Log.e(TAG, "Failed to load GLB from $sourceLabel", t)
         null
       }
+    }
+
+    private fun tryLoadFbxAnimation(context: Context): FbxAnimationClip? {
+      val candidates =
+        listOf(
+          "Running (1).fbx",
+          "assets/aistudio/Running (1).fbx",
+          "public/assets/aistudio/Running (1).fbx",
+          "Running%20(1).fbx",
+          "assets/aistudio/Running%20(1).fbx",
+          "Running.fbx",
+        )
+      var bytes: ByteArray? = null
+      var source = ""
+      for (name in candidates) {
+        bytes =
+          runCatching {
+            context.assets.open(name).use { it.readBytes() }
+          }.getOrNull()
+        if (bytes != null) {
+          source = "asset://$name"
+          break
+        }
+      }
+      if (bytes == null) {
+        val fileCandidates =
+          listOf(
+            File(context.filesDir, "Running (1).fbx"),
+            File(context.filesDir, "assets/aistudio/Running (1).fbx"),
+            File(context.filesDir, "public/assets/aistudio/Running (1).fbx"),
+          )
+        for (f in fileCandidates) {
+          if (f.isFile && f.canRead()) {
+            bytes = runCatching { f.readBytes() }.getOrNull()
+            if (bytes != null) {
+              source = f.absolutePath
+              break
+            }
+          }
+        }
+      }
+      if (bytes == null) {
+        Log.i(TAG, "FBX clip Running (1).fbx not bundled in assets; using fallback humanoid locomotion.")
+        return null
+      }
+      return runCatching {
+        FbxAnimLoader.parseFbxBytes(bytes, fallbackName = "Running (1)").also { clip ->
+          Log.i(TAG, "Loaded FBX animation $source: duration=${"%.2f".format(clip.durationSec)}s, bones=${clip.orderedBones.size}")
+        }
+      }.onFailure { err ->
+        Log.e(TAG, "Failed to parse FBX animation from $source", err)
+      }.getOrNull()
     }
 
     private fun uploadImageTexture(img: GlbImageData): Int {

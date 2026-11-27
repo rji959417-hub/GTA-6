@@ -163,7 +163,7 @@ class ViceGlRenderer(
         GlbGpuModel.tryLoadFromAssets(
           context = appContext,
           assetPath = "/cyberpunk_character.glb",
-          targetHeightMeters = 1.76f,
+          targetHeightMeters = 2.02f,
         )
 
       initShadowFbo(glVersionCached)
@@ -373,7 +373,7 @@ class ViceGlRenderer(
       Matrix.orthoM(lightProjMat, 0, -72f, 72f, -72f, 72f, 5f, 160f)
       Matrix.multiplyMM(lightViewProjMat, 0, lightProjMat, 0, lightViewMat, 0)
 
-      updateGlbHeroPoseForFrame()
+      updateGlbHeroPoseForFrame(dt)
 
       if (hasShadowMap) {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, shadowFbo)
@@ -853,8 +853,9 @@ class ViceGlRenderer(
       boxMesh.draw()
     }
 
-    // 4. Open-Top Sports Cars (Player + Autonomous AI Traffic Cars, with Visible Seated Drivers!)
-    for (car in sim.vehicles) {
+    // 4. Open-Top Sports Cars & Vice PD Police Cruisers
+    val policeCarSnapshot = synchronized(sim) { sim.policeCars.toList() }
+    for (car in sim.vehicles + policeCarSnapshot) {
       drawOpenTopVehicle(car, uModel, uBaseColor, uMaterialType, uEmissive, uMetallic, uRoughness)
     }
 
@@ -967,6 +968,50 @@ class ViceGlRenderer(
         hitReactDirSign = ped.hitReactDirSign,
         vestLevel = ped.vestLevel,
         helmetLevel = ped.helmetLevel,
+      )
+    }
+
+    // 6B. Pursuing Vice PD Police Officers (Hands Out to Catch -> Draws Pistol on Arrest)
+    val policeOfficerSnapshot = synchronized(sim) { sim.policeOfficers.toList() }
+    for (officer in policeOfficerSnapshot) {
+      val knocked = officer.reactionState == NpcReactionState.KNOCKED_DOWN || officer.hp <= 0f
+      if (!knocked) {
+        val sirenFlip = ((sim.worldTimeSec * 7f).toInt() % 2 == 0)
+        val ringCol = if (sirenFlip) floatArrayOf(1.0f, 0.16f, 0.22f) else floatArrayOf(0.14f, 0.56f, 1.0f)
+        GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+        GLES20.glUniform1f(uEmissive, 1.15f)
+        GLES20.glUniform3fv(uBaseColor, 1, ringCol, 0)
+        setBoxModel(officer.x, officer.y + 0.06f, officer.z, 1.12f, 0.03f, 1.12f, sim.worldTimeSec * 70f)
+        GLES20.glUniformMatrix4fv(uModel, 1, false, modelMat, 0)
+        cylinderMesh.draw()
+        GLES20.glUniform1f(uEmissive, 0f)
+      }
+      characterRenderer.drawWalkingCharacter(
+        x = officer.x,
+        y = officer.y + 0.04f,
+        z = officer.z,
+        yawRad = officer.yawRad,
+        walkCycle = officer.walkCycle,
+        speedNorm = if (knocked) 0f else if (sim.activePoliceCapture?.officerId == officer.id) 0f else 1.05f,
+        isSprinting = !knocked && sim.activePoliceCapture == null,
+        isSwimming = false,
+        armReachNorm = if (knocked) 0f else officer.armReachNorm,
+        fallProgress = officer.fallProgress,
+        worldTimeSec = sim.worldTimeSec,
+        appearance = officer.appearance,
+        uModel = uModel,
+        uBaseColor = uBaseColor,
+        uMaterialType = uMaterialType,
+        uEmissive = uEmissive,
+        uMetallic = uMetallic,
+        uRoughness = uRoughness,
+        equippedWeapon = if (officer.policeHasGunDrawn) WeaponType.PISTOL_9MM else WeaponType.FISTS,
+        aimNorm = if (officer.policeHasGunDrawn) 1f else 0f,
+        hitReactZone = officer.hitReactZone,
+        hitReactProgress = (officer.hitReactTimerSec / 0.72f).coerceIn(0f, 1f),
+        hitReactDirSign = officer.hitReactDirSign,
+        vestLevel = officer.vestLevel,
+        helmetLevel = officer.helmetLevel,
       )
     }
 
@@ -1389,8 +1434,35 @@ class ViceGlRenderer(
     drawChildBox(base, 0f, 1.46f, 0.48f, 1.56f, 0.07f, 0.10f, uModel)
     boxMesh.draw()
 
-    // Hood & Rear Racing Stripe when a custom CarSkin is active
-    if (carSkin != com.example.game.state.CarSkin.FACTORY_DEFAULT) {
+    // Hood & Rear Racing Stripe when a custom CarSkin is active or Police Cruiser Livery + Lightbar
+    if (car.isPoliceCar) {
+      val whiteDoor = floatArrayOf(0.95f, 0.96f, 0.99f)
+      GLES20.glUniform1i(uMaterialType, MaterialSurface.CAR_PAINT.id)
+      GLES20.glUniform1f(uEmissive, 0f)
+      GLES20.glUniform3fv(uBaseColor, 1, whiteDoor, 0)
+      drawChildBox(base, 0f, 0.87f, 1.26f, 0.72f, 0.03f, 1.28f, uModel) // Police hood insignia panel
+      boxMesh.draw()
+      drawChildBox(base, -0.91f, 0.62f, -0.10f, 0.06f, 0.44f, 1.48f, uModel) // Left white police door
+      boxMesh.draw()
+      drawChildBox(base, 0.91f, 0.62f, -0.10f, 0.06f, 0.44f, 1.48f, uModel) // Right white police door
+      boxMesh.draw()
+
+      // Flashing Red & Blue Siren Lightbar mounted on Roll Hoop
+      val sirenPhase = ((sim.worldTimeSec * 8f).toInt() % 2 == 0)
+      val activeSiren = car.isPoliceDispatched || sim.activeVehicle?.id == car.id
+      val redGlow = if (activeSiren) (if (sirenPhase) 1.75f else 0.25f) else 0.40f
+      val blueGlow = if (activeSiren) (if (!sirenPhase) 1.75f else 0.25f) else 0.40f
+      GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+      GLES20.glUniform1f(uEmissive, redGlow)
+      GLES20.glUniform3fv(uBaseColor, 1, floatArrayOf(1.0f, 0.14f, 0.20f), 0)
+      drawChildBox(base, -0.34f, 1.65f, -0.82f, 0.56f, 0.14f, 0.26f, uModel)
+      boxMesh.draw()
+      GLES20.glUniform1f(uEmissive, blueGlow)
+      GLES20.glUniform3fv(uBaseColor, 1, floatArrayOf(0.14f, 0.58f, 1.0f), 0)
+      drawChildBox(base, 0.34f, 1.65f, -0.82f, 0.56f, 0.14f, 0.26f, uModel)
+      boxMesh.draw()
+      GLES20.glUniform1f(uEmissive, 0f)
+    } else if (carSkin != com.example.game.state.CarSkin.FACTORY_DEFAULT) {
       GLES20.glUniform1f(uEmissive, carSkin.emissiveTrim)
       drawChildBox(base, 0f, 0.87f, 1.28f, 0.42f, 0.03f, 1.32f, uModel)
       boxMesh.draw()
@@ -1414,7 +1486,8 @@ class ViceGlRenderer(
 
     // Visible Seated Driver inside the Cockpit (+ Companion riding passenger seat!)
     val isPlayerInside = (sim.activeVehicle?.id == car.id)
-    if (isPlayerInside || car.isAiTraffic || botDriver != null) {
+    val isPoliceDriving = car.isPoliceCar && car.isPoliceDispatched && !car.officerDisembarked && !isPlayerInside
+    if (isPlayerInside || car.isAiTraffic || botDriver != null || isPoliceDriving) {
       val driverAppearance =
         when {
           isPlayerInside -> currentPlayerAppearance()
@@ -2372,7 +2445,7 @@ class ViceGlRenderer(
     }
   }
 
-  private fun updateGlbHeroPoseForFrame() {
+  private fun updateGlbHeroPoseForFrame(dtSec: Float = 0.016f) {
     val glbHero = cyberpunkHeroModel ?: return
     if (sim.activeVehicle != null || sim.activeBoat != null || sim.dropPhase == DropPhase.AIRPLANE) return
     val isSprinting = (sim.input.sprintHeld || sim.input.autoSprint) && sim.playerSpeedNorm > 0.5f
@@ -2384,7 +2457,9 @@ class ViceGlRenderer(
       isSwimming = sim.isSwimming,
       fallProgress = fallProgress,
       worldTimeSec = sim.worldTimeSec,
+      dtSec = dtSec,
       sitProgress = sim.sitProgress,
+      proneProgress = sim.proneProgress,
       attackMove = sim.activeAttackMove,
       attackProgress = sim.attackProgress,
       equippedWeapon = sim.equippedWeapon,
@@ -2406,6 +2481,7 @@ class ViceGlRenderer(
       yawRad = sim.playerYawRad,
       fallProgress = fallProgress,
       sitProgress = sim.sitProgress,
+      proneProgress = sim.proneProgress,
       landingReaction = sim.activeLandingReaction,
       landingProgress = sim.landingReactionProgress,
       hasSkeletalRig = glbHero.stats.rig.hasLocomotionRig,

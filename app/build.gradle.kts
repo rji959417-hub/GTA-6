@@ -100,12 +100,12 @@ val syncPublicGlbAssets =
   tasks.register<SyncPublicGlbTask>("syncPublicGlbAssets") {
     publicGlbFiles.from(
       fileTree("${rootDir}/public") {
-        include("**/*.glb", "**/*.gltf")
+        include("**/*.glb", "**/*.gltf", "**/*.fbx")
       },
     )
     mainAssetFiles.from(
       fileTree("src/main/assets") {
-        include("**/*.glb", "**/*.gltf")
+        include("**/*.glb", "**/*.gltf", "**/*.fbx")
       },
     )
   }
