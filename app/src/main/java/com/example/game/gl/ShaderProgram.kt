@@ -232,6 +232,8 @@ uniform float uHeadlightOn;
 
 uniform sampler2D uShadowMap;
 uniform float uHasShadowMap;
+uniform sampler2D uBaseTex;
+uniform float uUseBaseTex;
 
 float hash21(vec2 p) {
   p = fract(p * vec2(127.1, 311.7));
@@ -356,10 +358,19 @@ void main() {
   vec3 L = normalize(uSunDir);
 
   vec3 albedo = proceduralAlbedo(uBaseColor, uMaterialType, vWorldPos, N);
+  float fragAlpha = uAlpha;
+  if (uUseBaseTex > 0.5) {
+    vec4 texel = texture2D(uBaseTex, vUv);
+    albedo = texel.rgb * uBaseColor;
+    fragAlpha *= texel.a;
+    if (fragAlpha < 0.08) {
+      discard;
+    }
+  }
 
   if (uEmissive > 0.01) {
     vec3 glow = albedo * (1.0 + uEmissive * 1.4);
-    gl_FragColor = vec4(glow, uAlpha);
+    gl_FragColor = vec4(glow, fragAlpha);
     return;
   }
 
@@ -413,7 +424,7 @@ void main() {
   vec3 fogColor = mix(uSkyHorizon * 0.85, uSkyZenith * 0.75, 0.25);
   color = mix(color, fogColor, clamp(fog, 0.0, 0.82));
 
-  gl_FragColor = vec4(color, uAlpha);
+  gl_FragColor = vec4(color, fragAlpha);
 }
 """
 

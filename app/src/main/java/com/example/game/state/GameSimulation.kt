@@ -4019,7 +4019,7 @@ class GameSimulation(val world: WorldData) {
     teleportOnFootTo(world.atollCenter.first, world.atollCenter.second + 8f, 0f)
   }
 
-  private fun teleportOnFootTo(tx: Float, tz: Float, yaw: Float) {
+  internal fun teleportOnFootTo(tx: Float, tz: Float, yaw: Float) {
     dropPhase = DropPhase.GROUND
     activeVehicle = null
     activeBoat = null

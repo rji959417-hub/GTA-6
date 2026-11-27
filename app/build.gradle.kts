@@ -70,6 +70,55 @@ android {
   }
 }
 
+abstract class SyncPublicGlbTask : DefaultTask() {
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val publicGlbFiles: ConfigurableFileCollection
+
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val mainAssetFiles: ConfigurableFileCollection
+
+  @get:OutputDirectory
+  abstract val outputDir: DirectoryProperty
+
+  @TaskAction
+  fun sync() {
+    val out = outputDir.get().asFile
+    out.deleteRecursively()
+    out.mkdirs()
+    val existingNames = mainAssetFiles.files.filter { it.isFile }.mapTo(HashSet()) { it.name }
+    for (file in publicGlbFiles.files) {
+      if (file.isFile && file.name !in existingNames) {
+        file.copyTo(File(out, file.name), overwrite = true)
+      }
+    }
+  }
+}
+
+val syncPublicGlbAssets =
+  tasks.register<SyncPublicGlbTask>("syncPublicGlbAssets") {
+    publicGlbFiles.from(
+      fileTree("${rootDir}/public") {
+        include("**/*.glb", "**/*.gltf")
+      },
+    )
+    mainAssetFiles.from(
+      fileTree("src/main/assets") {
+        include("**/*.glb", "**/*.gltf")
+      },
+    )
+  }
+
+androidComponents {
+  onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(
+      syncPublicGlbAssets,
+      SyncPublicGlbTask::outputDir,
+    )
+  }
+}
+
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
 secrets {

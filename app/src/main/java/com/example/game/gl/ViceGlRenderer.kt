@@ -1,5 +1,6 @@
 package com.example.game.gl
 
+import android.content.Context
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
@@ -30,6 +31,7 @@ import kotlin.math.sin
 class ViceGlRenderer(
   private val sim: GameSimulation,
   private val onHudTick: () -> Unit,
+  private val appContext: Context? = null,
 ) : GLSurfaceView.Renderer {
 
   private lateinit var worldShader: ShaderProgram
@@ -54,6 +56,8 @@ class ViceGlRenderer(
   private lateinit var domeMesh: Mesh
   private lateinit var characterRenderer: CartoonCharacterRenderer
   private lateinit var expandedRenderer: ExpandedWorldRenderer
+  private var cyberpunkHeroModel: GlbGpuModel? = null
+  private val glbPlayerMat = FloatArray(16)
 
   private var shadowFbo = 0
   private var shadowDepthTex = 0
@@ -152,6 +156,14 @@ class ViceGlRenderer(
           leftWingMesh = leftWingMesh,
           rightWingMesh = rightWingMesh,
           characterRenderer = characterRenderer,
+        )
+
+      cyberpunkHeroModel?.release()
+      cyberpunkHeroModel =
+        GlbGpuModel.tryLoadFromAssets(
+          context = appContext,
+          assetPath = "/cyberpunk_character.glb",
+          targetHeightMeters = 1.76f,
         )
 
       initShadowFbo(glVersionCached)
@@ -533,18 +545,40 @@ class ViceGlRenderer(
     }
 
     if (sim.activeVehicle == null && sim.activeBoat == null && sim.dropPhase != DropPhase.AIRPLANE && sim.playerY < 34f) {
-      setBoxModel(
-        sim.playerX,
-        sim.playerY + 0.92f,
-        sim.playerZ,
-        0.78f,
-        1.85f,
-        0.72f,
-        Math.toDegrees(sim.playerYawRad.toDouble()).toFloat(),
-      )
-      Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
-      GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
-      sphereMesh.draw()
+      val glbHero = cyberpunkHeroModel
+      if (glbHero != null) {
+        GlbGpuModel.computePlayerTransform(
+          outMatrix = glbPlayerMat,
+          x = sim.playerX,
+          y = sim.playerY,
+          z = sim.playerZ,
+          yawRad = sim.playerYawRad,
+          walkCycle = sim.playerWalkCycle,
+          speedNorm = sim.playerSpeedNorm,
+          isSprinting = (sim.input.sprintHeld || sim.input.autoSprint) && sim.playerSpeedNorm > 0.5f,
+          isSwimming = sim.isSwimming,
+          fallProgress = if (sim.isPlayerEliminated) sim.playerFallProgress else 0f,
+          worldTimeSec = sim.worldTimeSec,
+          sitProgress = sim.sitProgress,
+          isSkydiving = sim.dropPhase == DropPhase.FREEFALL,
+          isParachuting = sim.dropPhase == DropPhase.PARACHUTE,
+          airborneFallNorm = sim.airborneFallNorm,
+        )
+        glbHero.drawShadow(glbPlayerMat, lightViewProjMat, mvpMat, uLightMvp)
+      } else {
+        setBoxModel(
+          sim.playerX,
+          sim.playerY + 0.92f,
+          sim.playerZ,
+          0.78f,
+          1.85f,
+          0.72f,
+          Math.toDegrees(sim.playerYawRad.toDouble()).toFloat(),
+        )
+        Matrix.multiplyMM(mvpMat, 0, lightViewProjMat, 0, modelMat, 0)
+        GLES20.glUniformMatrix4fv(uLightMvp, 1, false, mvpMat, 0)
+        sphereMesh.draw()
+      }
     }
   }
 
@@ -1036,42 +1070,93 @@ class ViceGlRenderer(
     }
 
     if (sim.activeVehicle == null && sim.activeBoat == null && sim.dropPhase != DropPhase.AIRPLANE) {
-      characterRenderer.drawWalkingCharacter(
-        x = sim.playerX,
-        y = sim.playerY,
-        z = sim.playerZ,
-        yawRad = sim.playerYawRad,
-        walkCycle = sim.playerWalkCycle,
-        speedNorm = sim.playerSpeedNorm,
-        isSprinting = (sim.input.sprintHeld || sim.input.autoSprint) && sim.playerSpeedNorm > 0.5f,
-        isSwimming = sim.isSwimming,
-        armReachNorm = sim.playerArmReachNorm,
-        fallProgress = if (sim.isPlayerEliminated) sim.playerFallProgress else 0f,
-        worldTimeSec = sim.worldTimeSec,
-        appearance = heroAppearance,
-        uModel = uModel,
-        uBaseColor = uBaseColor,
-        uMaterialType = uMaterialType,
-        uEmissive = uEmissive,
-        uMetallic = uMetallic,
-        uRoughness = uRoughness,
-        sitProgress = sim.sitProgress,
-        attackMove = sim.activeAttackMove,
-        attackProgress = sim.attackProgress,
-        equippedWeapon = sim.equippedWeapon,
-        aimNorm = sim.aimNorm,
-        muzzleFlash = sim.muzzleFlashNorm,
-        isSkydiving = sim.dropPhase == DropPhase.FREEFALL,
-        isParachuting = sim.dropPhase == DropPhase.PARACHUTE,
-        parkourType = sim.activeParkour?.type,
-        parkourProgress = sim.parkourProgress,
-        airborneFallNorm = sim.airborneFallNorm,
-        landingReaction = sim.activeLandingReaction,
-        landingProgress = sim.landingReactionProgress,
-        vestLevel = sim.playerVestLevel,
-        helmetLevel = sim.playerHelmetLevel,
-        gunSkin = sim.equippedGunSkin,
-      )
+      val glbHero = cyberpunkHeroModel
+      if (glbHero != null) {
+        GlbGpuModel.computePlayerTransform(
+          outMatrix = glbPlayerMat,
+          x = sim.playerX,
+          y = sim.playerY,
+          z = sim.playerZ,
+          yawRad = sim.playerYawRad,
+          walkCycle = sim.playerWalkCycle,
+          speedNorm = sim.playerSpeedNorm,
+          isSprinting = (sim.input.sprintHeld || sim.input.autoSprint) && sim.playerSpeedNorm > 0.5f,
+          isSwimming = sim.isSwimming,
+          fallProgress = if (sim.isPlayerEliminated) sim.playerFallProgress else 0f,
+          worldTimeSec = sim.worldTimeSec,
+          sitProgress = sim.sitProgress,
+          isSkydiving = sim.dropPhase == DropPhase.FREEFALL,
+          isParachuting = sim.dropPhase == DropPhase.PARACHUTE,
+          airborneFallNorm = sim.airborneFallNorm,
+        )
+        glbHero.drawLit(
+          baseMatrix = glbPlayerMat,
+          uModel = uModel,
+          uBaseColor = uBaseColor,
+          uMaterialType = uMaterialType,
+          uEmissive = uEmissive,
+          uMetallic = uMetallic,
+          uRoughness = uRoughness,
+          uAlpha = uAlpha,
+          uUseBaseTex = worldShader.loc("uUseBaseTex"),
+          uBaseTex = worldShader.loc("uBaseTex"),
+        )
+        if (sim.equippedWeapon != WeaponType.FISTS && sim.dropPhase == DropPhase.GROUND && !sim.isPlayerEliminated) {
+          val sitMulY = 1f - sim.sitProgress * 0.30f
+          GLES20.glUniform1i(uMaterialType, MaterialSurface.SLATE.id)
+          GLES20.glUniform1f(uMetallic, 0.80f)
+          GLES20.glUniform1f(uRoughness, 0.24f)
+          GLES20.glUniform1f(uEmissive, 0.08f)
+          GLES20.glUniform3fv(uBaseColor, 1, sim.equippedGunSkin.primaryColor, 0)
+          drawChildBox(glbPlayerMat, 0.28f, 1.04f * sitMulY, 0.32f, 0.11f, 0.14f, 0.52f, uModel)
+          boxMesh.draw()
+          if (sim.muzzleFlashNorm > 0.05f) {
+            GLES20.glUniform1i(uMaterialType, MaterialSurface.EMISSIVE.id)
+            GLES20.glUniform1f(uEmissive, 1.4f * sim.muzzleFlashNorm)
+            GLES20.glUniform3fv(uBaseColor, 1, floatArrayOf(1.0f, 0.78f, 0.24f), 0)
+            drawChildBox(glbPlayerMat, 0.28f, 1.06f * sitMulY, 0.64f, 0.18f, 0.18f, 0.22f, uModel)
+            sphereMesh.draw()
+          }
+          GLES20.glUniform1f(uEmissive, 0f)
+        }
+      } else {
+        characterRenderer.drawWalkingCharacter(
+          x = sim.playerX,
+          y = sim.playerY,
+          z = sim.playerZ,
+          yawRad = sim.playerYawRad,
+          walkCycle = sim.playerWalkCycle,
+          speedNorm = sim.playerSpeedNorm,
+          isSprinting = (sim.input.sprintHeld || sim.input.autoSprint) && sim.playerSpeedNorm > 0.5f,
+          isSwimming = sim.isSwimming,
+          armReachNorm = sim.playerArmReachNorm,
+          fallProgress = if (sim.isPlayerEliminated) sim.playerFallProgress else 0f,
+          worldTimeSec = sim.worldTimeSec,
+          appearance = heroAppearance,
+          uModel = uModel,
+          uBaseColor = uBaseColor,
+          uMaterialType = uMaterialType,
+          uEmissive = uEmissive,
+          uMetallic = uMetallic,
+          uRoughness = uRoughness,
+          sitProgress = sim.sitProgress,
+          attackMove = sim.activeAttackMove,
+          attackProgress = sim.attackProgress,
+          equippedWeapon = sim.equippedWeapon,
+          aimNorm = sim.aimNorm,
+          muzzleFlash = sim.muzzleFlashNorm,
+          isSkydiving = sim.dropPhase == DropPhase.FREEFALL,
+          isParachuting = sim.dropPhase == DropPhase.PARACHUTE,
+          parkourType = sim.activeParkour?.type,
+          parkourProgress = sim.parkourProgress,
+          airborneFallNorm = sim.airborneFallNorm,
+          landingReaction = sim.activeLandingReaction,
+          landingProgress = sim.landingReactionProgress,
+          vestLevel = sim.playerVestLevel,
+          helmetLevel = sim.playerHelmetLevel,
+          gunSkin = sim.equippedGunSkin,
+        )
+      }
     }
 
     // 8A. Remote P2P Multiplayer Squadmates synced over PeerJS DataChannel
@@ -1809,6 +1894,10 @@ class ViceGlRenderer(
       GLES20.glUniform1f(worldShader.loc("uHasShadowMap"), 1f)
     } else {
       GLES20.glUniform1f(worldShader.loc("uHasShadowMap"), 0f)
+    }
+    val uUseBaseTex = worldShader.loc("uUseBaseTex")
+    if (uUseBaseTex >= 0) {
+      GLES20.glUniform1f(uUseBaseTex, 0f)
     }
   }
 

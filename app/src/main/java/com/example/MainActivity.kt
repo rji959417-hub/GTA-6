@@ -70,8 +70,12 @@ class MainActivity : ComponentActivity() {
         )
         val hud by vm.hudState.collectAsStateWithLifecycle()
         val permanentCode by vm.permanentPlayerCode.collectAsStateWithLifecycle()
-        val renderer = remember(vm) {
-          ViceGlRenderer(sim = vm.simulation, onHudTick = { vm.refreshHudFromGlThread() })
+        val renderer = remember(vm, context) {
+          ViceGlRenderer(
+            sim = vm.simulation,
+            onHudTick = { vm.refreshHudFromGlThread() },
+            appContext = context.applicationContext,
+          )
         }
 
         ViceHorizonScreen(
